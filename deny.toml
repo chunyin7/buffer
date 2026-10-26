@@ -1,0 +1,83 @@
+# Enforces the dependency policy in AGENTS.md. Run `cargo deny check`.
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+# Feature-gated dependencies (e.g. the planned puffin backend) get checked too, matching CI.
+all-features = true
+
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained, with no known vulnerability. Reached via winit's titled client-side decorations (sctk-adwaita -> ab_glyph), and typst 0.15 depends on it directly. Revisit when either moves to skrifa." },
+]
+
+[licenses]
+# The full allow list from AGENTS.md, including licenses no dependency uses yet.
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+allow-wildcard-paths = true
+# Duplicates we can't remove: each names who pulls the older version.
+skip = [
+    { crate = "bitflags:1", reason = "core-graphics 0.23 (winit 0.30, macOS); everything else uses 2.x" },
+    { crate = "block2:0.5", reason = "winit 0.30 (macOS); eframe and wgpu use 0.6" },
+    { crate = "hashbrown:0.16", reason = "gpu-allocator (wgpu-hal); indexmap, naga, and wgpu use 0.17" },
+    { crate = "linux-raw-sys:0.4", reason = "rustix 0.38, see rustix" },
+    { crate = "miniz_oxide:0.8", reason = "png uses 0.8 directly and 0.9 through flate2" },
+    { crate = "objc2:0.5", reason = "winit 0.30 (macOS); eframe and wgpu use 0.6" },
+    { crate = "objc2-app-kit:0.2", reason = "winit 0.30 (macOS); eframe uses 0.3" },
+    { crate = "objc2-foundation:0.2", reason = "winit 0.30 (macOS); eframe and wgpu use 0.3" },
+    { crate = "rustc-hash:1", reason = "naga and wgpu-core; egui-wgpu's type-map uses 2.x" },
+    { crate = "rustix:0.38", reason = "winit 0.30, calloop 0.13, smithay-client-toolkit 0.19 (Wayland); wayland-backend and x11rb use 1.x" },
+    { crate = "syn:2", reason = "thiserror-impl 1, zerocopy-derive, windows-implement, windows-interface; the rest use 3.x" },
+    { crate = "thiserror:1", reason = "calloop 0.13 and smithay-client-toolkit 0.19 (winit 0.30, Wayland); wgpu uses 2.x" },
+    { crate = "thiserror-impl:1", reason = "thiserror 1, see thiserror" },
+    { crate = "windows-sys:0.52", reason = "winit 0.30 (Windows); eframe and egui-winit use 0.61" },
+    { crate = "windows-sys:0.59", reason = "rustix 0.38, see rustix" },
+]
+deny = [
+    # No network I/O: network crates need an explicit decision in AGENTS.md.
+    { crate = "curl", reason = "network crate; buffer does no network I/O" },
+    { crate = "hyper", reason = "network crate; buffer does no network I/O" },
+    { crate = "native-tls", reason = "network crate; buffer does no network I/O" },
+    { crate = "openssl", reason = "network crate; buffer does no network I/O" },
+    { crate = "reqwest", reason = "network crate; buffer does no network I/O" },
+    { crate = "rustls", reason = "network crate; buffer does no network I/O" },
+    { crate = "ureq", reason = "network crate; buffer does no network I/O" },
+    # Layer purity: core, text, and modal never depend on egui or typst. Render, math, ui, and app
+    # may: add the crate to `wrappers` when it starts using one (unused wrappers warn). Direct
+    # dependencies only; transitive paths are left to review.
+    { crate = "egui", wrappers = [
+        "eframe",
+        "egui-wgpu",
+        "egui-winit",
+    ], reason = "egui is for render, math, ui, and app only" },
+    { crate = "eframe", wrappers = ["buffer-app"], reason = "eframe is for render, math, ui, and app only" },
+    { crate = "typst", reason = "typst is for render, math, ui, and app only" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -185,6 +185,8 @@ crates/
 9. **Notes are untrusted input.** Parsers never panic on any input (fuzzed); typst runs sandboxed
    and bounded; no network I/O.
 10. **Core crates are pure.** No egui, typst, or platform APIs in core, text, or modal.
+    `deny.toml` bans direct egui, eframe, and typst dependencies outside render, math, ui, and
+    app; transitive paths are left to review.
 
 ## Markdown dialect (summary; full spec in docs/markdown-dialect.md, M2)
 
@@ -223,23 +225,25 @@ Targets until M0 records baselines in docs/performance.md.
 - Every new crate needs a stated reason in the change description: purpose, why not hand-roll,
   size delta (`cargo bloat`), transitive crates (`cargo tree`), license, maintenance status.
 - First check whether egui or typst already link it (`cargo tree -i <crate>`), and reuse that
-  major version. No duplicate versions (`cargo tree -d`).
+  major version. No duplicate versions (`cargo tree -d`); unavoidable upstream ones get a
+  reasoned `skip` in `deny.toml`.
 - `default-features = false`; enable only what's used. Versions live in
   `[workspace.dependencies]`.
 - Not allowed without an explicit decision here: async runtimes, C/C++ build dependencies beyond
-  what egui/wgpu need, network crates.
+  what egui/wgpu need, network crates (banned in `deny.toml`).
 - Allowed licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0,
   CC0-1.0, BSL-1.0, MPL-2.0, OFL-1.1 and Ubuntu-font-1.0 (fonts; egui's `default_fonts` bundles
-  Ubuntu-Light). Not allowed: GPL, LGPL, AGPL, SSPL, non-commercial. `cargo deny` enforces this
-  from M0.
+  Ubuntu-Light). Not allowed: GPL, LGPL, AGPL, SSPL, non-commercial.
+- `cargo deny check` enforces licenses, RustSec advisories, duplicates, bans, and crates.io-only
+  sources. Each ignored advisory and skipped duplicate in `deny.toml` carries a reason.
 
 ## Working in this repo
 
 - VCS is **jj**, colocated with git: `jj st`, `jj diff`, `jj describe -m`, `jj new`. Use git only
   for what jj can't do.
 - Before finishing a change: `cargo fmt --all --check`,
-  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` (plus
-  `cargo deny check` once configured).
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`,
+  `cargo deny check`.
 - Tests:
   - Unit and property tests for core/text/modal: transactions compose and invert, selection
     mapping, byte-identical round-trips.
