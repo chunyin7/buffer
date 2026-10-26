@@ -43,7 +43,7 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
 
 ### Platform and UI
 
-- **Rust 2024, latest stable.** The dev box uses Fedora's rustc 1.98.1 (no rustup).
+- **Rust 2024, latest stable.** The dev box uses Fedora's packaged rustc (no rustup).
 - **License: MIT OR Apache-2.0.** Constrains dependencies (see Dependency policy).
 - **egui/eframe 0.37.** The editor, render view, pickers, command line, and status line are
   hand-rolled widgets. Stock egui widgets only for chrome and settings.
@@ -240,6 +240,8 @@ Targets until M0 records baselines in docs/performance.md.
   sources. Each ignored advisory and skipped duplicate in `deny.toml` carries a reason.
 
 ## Working in this repo
+
+Toolchain setup, CI, and the dependency policy step by step: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - VCS is **jj**, colocated with git: `jj st`, `jj diff`, `jj describe -m`, `jj new`. Use git only
   for what jj can't do.
