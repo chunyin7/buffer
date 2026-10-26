@@ -4,7 +4,11 @@ Guidance for anyone (human or agent) changing this repo. Until `docs/` fills in,
 source of truth for scope, decisions, invariants, and conventions. Change a decision here in the
 same commit that changes the behavior.
 
+## Implementation Guide
+
 As an agent when contributing to this project, keep contributions as atomic as possible unless asked and ALWAYS defer to the user regarding architectural decisions or finer implementation decisions.
+
+Code should always prioritise human readability and understandability. We want to minimise unnecessary layers of abstraction whenever possible. For non-trivial code changes, always prefer going through an atomic human code review process.
 
 ## Status
 
