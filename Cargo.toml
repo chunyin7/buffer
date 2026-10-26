@@ -21,3 +21,18 @@ winit = { version = "0.30", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
+
+[workspace.lints.clippy]
+# Unsafe code (platform glue only) needs a `// SAFETY:` comment.
+undocumented_unsafe_blocks = "warn"
+# No unwrap/expect outside tests; documented invariants use `#[expect(..., reason = "...")]`.
+unwrap_used = "warn"
+expect_used = "warn"
+allow_attributes_without_reason = "warn"
+# Hygiene.
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+# Output goes through the `log` facade.
+print_stdout = "warn"
+print_stderr = "warn"

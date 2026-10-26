@@ -252,6 +252,8 @@ Targets until M0 records baselines in docs/performance.md.
 - Performance-sensitive changes include before/after numbers.
 - Code: crates are `buffer-*` under `crates/`. `unsafe_code = "deny"` workspace-wide; exceptions
   only in platform glue, with `// SAFETY:` comments. No `unwrap`/`expect` outside tests except
-  for documented invariants.
+  for documented invariants. No `dbg!`, `todo!`, `unimplemented!`, or print macros (output goes
+  through `log`). Workspace lints in the root `Cargo.toml` enforce all of this; an exception is
+  `#[expect(lint, reason = "…")]`.
 - Docs land with the behavior they describe. Decisions become ADRs in `docs/decisions/` starting
   in M0; this file stays the summary.
