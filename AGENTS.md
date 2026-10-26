@@ -8,7 +8,8 @@ As an agent when contributing to this project, keep contributions as atomic as p
 
 ## Status
 
-- Pre-alpha: the repo is still the `cargo new` skeleton. Everything below is decided, not
+- Pre-alpha: licenses and the workspace with the target crate layout are in place; only
+  `buffer-app` has code (it opens an empty window). Everything else below is decided, not
   implemented, unless marked otherwise.
 - Current milestone: **M0 Foundations**. Milestones and planned docs: [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -48,6 +49,11 @@ Measurements cited here: 2026-10-26 on the dev box (24 cores, rustc 1.98.1), str
   Stay on epaint (no custom shaders) until a feature needs them. Size lever: trim wgpu backends
   per target via eframe's `wgpu_no_default_features`. Baseline: eframe 0.37 hello world is
   20.6 MB release, 12.1 MB with fat LTO, 273 crates.
+- **eframe features:** `default-features = false`, plus `wgpu`, `default_fonts`, `wayland`, and
+  `x11`. A direct `winit` dependency, used only for its feature flags, adds `wayland-dlopen` (no
+  build-time libwayland; starts on X11-only systems) and `wayland-csd-adwaita` (a title bar where
+  the compositor draws no decorations, e.g. GNOME). `clipboard` waits for M1. `accesskit` stays
+  off until decided: its Linux adapter pulls in zbus + async-io, an async runtime.
 - **Platforms:** Linux, macOS, Windows now; native iPad later. Core crates stay
   platform-agnostic, and file access goes through a `Vault` trait so the iOS sandbox
   (security-scoped bookmarks) fits later.
@@ -223,8 +229,9 @@ Targets until M0 records baselines in docs/performance.md.
 - Not allowed without an explicit decision here: async runtimes, C/C++ build dependencies beyond
   what egui/wgpu need, network crates.
 - Allowed licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0,
-  CC0-1.0, BSL-1.0, MPL-2.0, OFL-1.1 (fonts). Not allowed: GPL, LGPL, AGPL, SSPL,
-  non-commercial. `cargo deny` enforces this from M0.
+  CC0-1.0, BSL-1.0, MPL-2.0, OFL-1.1 and Ubuntu-font-1.0 (fonts; egui's `default_fonts` bundles
+  Ubuntu-Light). Not allowed: GPL, LGPL, AGPL, SSPL, non-commercial. `cargo deny` enforces this
+  from M0.
 
 ## Working in this repo
 

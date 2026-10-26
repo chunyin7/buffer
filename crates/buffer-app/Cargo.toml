@@ -1,0 +1,21 @@
+[package]
+name = "buffer-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "buffer"
+path = "src/main.rs"
+
+[dependencies]
+buffer-ui.workspace = true
+eframe = { workspace = true, features = ["default_fonts", "wayland", "wgpu", "x11"] }
+# Feature flags only; eframe already links winit. Load libwayland at runtime (no build-time
+# wayland-devel; starts on X11-only systems) and draw Adwaita client-side decorations where the
+# compositor has no server-side ones (GNOME).
+winit = { workspace = true, features = ["wayland-csd-adwaita", "wayland-dlopen"] }
+
+[lints]
+workspace = true

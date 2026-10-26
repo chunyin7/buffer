@@ -1,0 +1,13 @@
+[package]
+name = "buffer-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+buffer-modal.workspace = true
+buffer-render.workspace = true
+
+[lints]
+workspace = true
