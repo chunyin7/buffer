@@ -8,10 +8,13 @@ As an agent when contributing to this project, keep contributions as atomic as p
 
 ## Status
 
-- Pre-alpha: licenses and the workspace with the target crate layout are in place; only
-  `buffer-app` has code (it opens an empty window). Everything else below is decided, not
-  implemented, unless marked otherwise.
+- Pre-alpha: licenses, the workspace with the target crate layout, lints, cargo-deny, CI, and the
+  README, CONTRIBUTING, architecture doc, and ADRs are in place; only `buffer-app` has code (it
+  opens an empty window). Everything else below is decided, not implemented, unless marked
+  otherwise.
 - Current milestone: **M0 Foundations**. Milestones and planned docs: [docs/ROADMAP.md](docs/ROADMAP.md).
+- M0 still to do: baselines with docs/performance.md, the typst spike, and a first green CI run
+  on all three OSes.
 
 ## Product
 
