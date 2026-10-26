@@ -144,7 +144,7 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
 - SQLite storage or index: files are the truth; an in-memory index is enough at target scale.
 - glow renderer: wgpu chosen to keep one backend.
 
-## Architecture (target; created in M0)
+## Architecture (target; detail in [docs/architecture.md](docs/architecture.md))
 
 ```
 crates/
