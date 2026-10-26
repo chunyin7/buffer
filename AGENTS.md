@@ -37,7 +37,9 @@ Linux, macOS, and Windows first, iPad later. Lean and fast are features.
 
 ## Decisions
 
-Measurements cited here: 2026-10-26 on the dev box (24 cores, rustc 1.98.1), stripped binaries.
+Summaries; each decision has an ADR in [docs/decisions/](docs/decisions/README.md) with its
+context, consequences, and any rejected alternatives. Measurements cited here: 2026-10-26 on the
+dev box (24 cores, rustc 1.98.1), stripped binaries.
 
 ### Platform and UI
 
@@ -259,5 +261,6 @@ Targets until M0 records baselines in docs/performance.md.
   for documented invariants. No `dbg!`, `todo!`, `unimplemented!`, or print macros (output goes
   through `log`). Workspace lints in the root `Cargo.toml` enforce all of this; an exception is
   `#[expect(lint, reason = "…")]`.
-- Docs land with the behavior they describe. Decisions become ADRs in `docs/decisions/` starting
-  in M0; this file stays the summary.
+- Docs land with the behavior they describe. A new or changed decision gets an ADR in
+  `docs/decisions/` (append-only: supersede, don't rewrite) and its summary here, in the same
+  change.
