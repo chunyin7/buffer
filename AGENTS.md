@@ -6,9 +6,9 @@ same commit that changes the behavior.
 
 ## Implementation Guide
 
-As an agent when contributing to this project, keep contributions as atomic as possible unless asked and ALWAYS defer to the user regarding architectural decisions or finer implementation decisions.
+As an agent when contributing to this project, keep contributions as atomic as possible unless asked and ALWAYS defer to the user regarding architectural decisions, finer implementation decisisions or even non-trivial abstraction designs.
 
-Code should always prioritise human readability and understandability. We want to minimise unnecessary layers of abstraction whenever possible. For non-trivial code changes, always prefer going through an atomic human code review process.
+Code should always prioritise human readability and understandability. We want to minimise unnecessary layers of abstraction whenever possible. For non-trivial code changes, always prefer going through an atomic human code review process, where after completing a turn you should walk the user through your change to be reviewed.
 
 ## Status
 
