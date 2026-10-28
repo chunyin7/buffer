@@ -62,3 +62,4 @@ Each rejected option with the reason. Omit the section if none were weighed.
 | [0024](0024-whiteboard-pen-input.md) | Whiteboard pen input needs winit 0.31 |
 | [0025](0025-crate-architecture.md) | Crate architecture |
 | [0026](0026-dependency-policy.md) | Dependency policy |
+| [0027](0027-helix-selection-ranges.md) | Selections are Helix-style ranges |

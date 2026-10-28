@@ -110,6 +110,11 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
 - **Selection-based core, Helix/Kakoune style.** Every edit is a transaction (change set plus
   resulting selections). Selections map through changes. Undo history is a revision tree. Vim's
   operator + motion becomes "select, then act", so one core serves both presets.
+- **Selections are Helix ranges.** A range is an anchor and a head (byte offsets) covering the
+  half-open span between them; a selection is sorted, non-overlapping ranges, one of them
+  primary. The block cursor is the grapheme at the head, or the one before it when the range
+  points forward. Normal mode keeps ranges at least one grapheme wide; Insert mode allows empty
+  ones. Vim's cursor is a one-grapheme range, and operator + motion selects, then acts.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.
