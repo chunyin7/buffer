@@ -14,8 +14,8 @@ A keyboard-driven, tag-based Markdown notes app, written in Rust with egui. The 
 ## Status
 
 Pre-alpha; nothing is usable yet. Milestone M0 (foundations) is in progress: the workspace,
-lints, cargo-deny, CI, and the decision records exist, and `buffer` opens an empty window. See
-the [roadmap](docs/ROADMAP.md).
+lints, cargo-deny, CI, and the decision records exist, and `buffer` opens an empty window. M1
+(editing) has started with the text core. See the [roadmap](docs/ROADMAP.md).
 
 ## Build and run
 

@@ -16,7 +16,9 @@ buffer-render = { path = "crates/buffer-render" }
 buffer-text = { path = "crates/buffer-text" }
 buffer-ui = { path = "crates/buffer-ui" }
 
+crop = { version = "0.4", default-features = false }
 eframe = { version = "0.37", default-features = false }
+proptest = { version = "1", default-features = false }
 winit = { version = "0.30", default-features = false }
 
 [workspace.lints.rust]

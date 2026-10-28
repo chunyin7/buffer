@@ -54,8 +54,8 @@ clippy and tests on Linux, macOS, and Windows, all with `--locked`.
 
 ## Tests
 
-- Unit and property tests for core, text, and modal: transactions compose and invert, selections
-  map through changes, round-trips are byte-identical.
+- Unit and property tests (proptest) for core, text, and modal: transactions compose and invert,
+  selections map through changes, round-trips are byte-identical.
 - Keymap tests are tables of key sequence → buffer + selection, run for both presets.
 - Fuzz targets for parsers.
 - UI tests use `egui_kittest`. Custom widgets expose AccessKit roles and names; kittest fails

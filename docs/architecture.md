@@ -4,8 +4,9 @@ How buffer fits together: crates, dependency rules, threads, the frame loop, and
 decisions behind each part are in [decisions/](decisions/README.md); this doc shows how they
 connect.
 
-Status: the workspace and crate layout exist, and only `buffer-app` has code: it opens an empty
-window. Everything else here is the target design.
+Status: the workspace and crate layout exist. `buffer-app` opens an empty window, and
+`buffer-text` has text and change sets ([editor/model.md](editor/model.md)). Everything else here
+is the target design.
 
 ## Crates
 

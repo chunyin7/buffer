@@ -13,10 +13,12 @@ Code should always prioritise human readability and understandability. We want t
 ## Status
 
 - Pre-alpha: licenses, the workspace with the target crate layout, lints, cargo-deny, CI, and the
-  README, CONTRIBUTING, architecture doc, and ADRs are in place; only `buffer-app` has code (it
-  opens an empty window). Everything else below is decided, not implemented, unless marked
-  otherwise.
-- Current milestone: **M0 Foundations**. Milestones and planned docs: [docs/ROADMAP.md](docs/ROADMAP.md).
+  README, CONTRIBUTING, architecture doc, and ADRs are in place. `buffer-app` opens an empty
+  window, and `buffer-text` has text and change sets
+  ([docs/editor/model.md](docs/editor/model.md)). Everything else below is decided, not
+  implemented, unless marked otherwise.
+- Current milestone: **M0 Foundations**; **M1 Editing** has started in `buffer-text`. Milestones
+  and planned docs: [docs/ROADMAP.md](docs/ROADMAP.md).
 - M0 still to do: baselines with docs/performance.md, the typst spike, and a first green CI run
   on all three OSes.
 
@@ -267,8 +269,8 @@ Toolchain setup, CI, and the dependency policy step by step: [CONTRIBUTING.md](C
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`,
   `cargo deny check`.
 - Tests:
-  - Unit and property tests for core/text/modal: transactions compose and invert, selection
-    mapping, byte-identical round-trips.
+  - Unit and property tests (proptest) for core/text/modal: transactions compose and invert,
+    selection mapping, byte-identical round-trips.
   - Keymap tests are tables of key sequence → buffer + selection, run for both presets.
   - Fuzz targets for parsers.
   - UI via `egui_kittest`. Custom widgets must expose AccessKit roles and names; kittest fails
