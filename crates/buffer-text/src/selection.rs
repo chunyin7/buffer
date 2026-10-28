@@ -37,7 +37,8 @@ impl Range {
         self.anchor == self.head
     }
 
-    /// Whether the ranges share a byte or start at the same offset.
+    /// Whether one range starts where the other starts or inside it, before its end. Touching
+    /// ranges don't overlap; an empty range inside another does.
     fn overlaps(&self, other: &Self) -> bool {
         self.start() == other.start() || (self.end() > other.start() && other.end() > self.start())
     }
@@ -60,7 +61,8 @@ impl Range {
         // The start first: the mapper takes positions in order.
         let start = mapper.map(self.start(), Assoc::After);
         let end = mapper.map(self.end(), Assoc::Before);
-        // A range inside replaced bytes maps past its own end; it then covers the new text.
+        // A range strictly inside replaced bytes maps past its own end; swapped, it covers the
+        // new text.
         let (start, end) = (start.min(end), start.max(end));
         if self.anchor < self.head {
             Self::new(start, end)
@@ -72,8 +74,8 @@ impl Range {
 
 /// One or more ranges, one of them primary.
 ///
-/// The ranges are sorted and never overlap: ranges that share a byte or start at the same offset
-/// merge into one.
+/// The ranges are sorted and never overlap: a range that starts where another starts, or inside
+/// it, merges with it. Touching ranges stay apart.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Selection {
     ranges: SmallVec<[Range; 1]>,

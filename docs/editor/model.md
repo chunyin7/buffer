@@ -66,10 +66,11 @@ Mapping is monotonic: for one `assoc`, a later position never maps before an ear
 - A `Range` is two byte offsets, `anchor` and `head`, covering the half-open span from `start()`
   (the smaller) to `end()` (the larger). Extending a range moves its head.
 - A `Selection` is one or more ranges, one of them primary. `Selection::new(primary, others)`
-  sorts them and merges ranges that share a byte or start at the same offset; touching ranges,
-  and an empty range at another's end, stay apart. A merged range points backward only if both
-  ranges did, and it is primary if either was. Taking the primary range itself means a selection
-  can't be empty or have a primary index past its ranges.
+  sorts them and merges a range that starts where another starts, or inside it: overlapping
+  ranges merge, and so does an empty range inside another. Touching ranges, and an empty range at
+  another's end, stay apart. A merged range points backward only if both ranges did, and it is
+  primary if either was. Taking the primary range itself means a selection can't be empty or have
+  a primary index past its ranges.
 - Ranges sit in a `SmallVec` with room for one, so a single-range selection doesn't allocate.
 - The block cursor, and the one-grapheme minimum in Normal mode, need grapheme boundaries; they
   land with the motions.
@@ -79,9 +80,15 @@ Mapping is monotonic: for one `assoc`, a later position never maps before an ear
 `Selection::map(changes)` maps every range, then merges ranges that now overlap.
 
 - A range's start maps with `Assoc::After` and its end with `Assoc::Before`, so text inserted at
-  either edge stays outside it, and a replaced range covers the new text.
+  either edge stays outside it, and a range that contains replaced bytes covers the new text.
 - An empty range maps with `Assoc::After`: typing at a cursor moves it past the typed text.
-- A range inside replaced bytes covers the new text, keeping its direction.
+- A range that reaches into replaced bytes from outside keeps only its part outside them.
+- A range strictly inside replaced bytes maps past its own end; its ends swap, so it covers the
+  new text, keeping its direction.
+- At an edge of replaced bytes, both ends land on one point: a range from their start to inside
+  them collapses to the start of the new text, and one from inside them to their end collapses to
+  the end of the new text. Deleting a range's text collapses it too, so a caller that needs
+  non-empty ranges (Normal mode) widens them after mapping.
 - Sorted, non-overlapping ranges give positions in order, so the mapping is one pass over the
   change set and the ranges together.
 
