@@ -14,9 +14,9 @@ Code should always prioritise human readability and understandability. We want t
 
 - Pre-alpha: licenses, the workspace with the target crate layout, lints, cargo-deny, CI, and the
   README, CONTRIBUTING, architecture doc, and ADRs are in place. `buffer-app` opens an empty
-  window, and `buffer-text` has text, change sets, selections, and transactions
-  ([docs/editor/model.md](docs/editor/model.md)). Everything else below is decided, not
-  implemented, unless marked otherwise.
+  window, and `buffer-text` has text, change sets, selections, transactions, and documents with
+  undo history ([docs/editor/model.md](docs/editor/model.md)). Everything else below is decided,
+  not implemented, unless marked otherwise.
 - Current milestone: **M0 Foundations**; **M1 Editing** has started in `buffer-text`. Milestones
   and planned docs: [docs/ROADMAP.md](docs/ROADMAP.md).
 - M0 still to do: baselines with docs/performance.md, the typst spike, and a first green CI run
@@ -123,6 +123,10 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
 - **Undo: one revision per Insert session, split by pauses.** A checkpoint command, a cursor move
   that isn't typing, or a typing pause of 1 s or more starts a new revision; the pause is checked
   when the next edit arrives (no timer). History stays in memory and dies with its buffer.
+- **A `Document` owns text, selection, and history.** Every edit and history move goes through
+  it, so history can't drift from the text; the caller passes commit points. `earlier`/`later`
+  move through revisions in the order they were made, by count or duration. Redo follows the
+  branch made or visited last, as in Vim.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.

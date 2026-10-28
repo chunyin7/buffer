@@ -2,11 +2,13 @@
 
 How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0016](../decisions/0016-crop-rope.md) (crop rope),
-[0017](../decisions/0017-selection-based-core.md) (selection-based core), and
-[0027](../decisions/0027-helix-selection-ranges.md) (Helix-style ranges).
+[0017](../decisions/0017-selection-based-core.md) (selection-based core),
+[0027](../decisions/0027-helix-selection-ranges.md) (Helix-style ranges),
+[0029](../decisions/0029-undo-insert-sessions.md) (undo steps), and
+[0031](../decisions/0031-document-owns-history.md) (documents and history).
 
-Status: text, change sets, selections, and transactions exist. History, lines, motions, text
-objects, and registers land later in M1.
+Status: text, change sets, selections, transactions, and documents with undo history exist.
+Lines, motions, text objects, and registers land later in M1.
 
 ## Text
 
@@ -100,8 +102,48 @@ A `Transaction` is one edit: a change set and the selection after it.
 - `invert(original, selection_before)` returns the transaction that undoes it, restoring both the
   text and the selection before.
 - `compose(next)` combines two transactions into one with both changes and `next`'s selection;
-  Insert-mode sessions will compose this way into a single revision
-  ([0029](../decisions/0029-undo-insert-sessions.md)).
+  a document composes the edits of one revision this way.
+
+## Documents and history
+
+A `Document` owns a text, its selection, and its undo history
+([0031](../decisions/0031-document-owns-history.md)). Every edit and every move through history
+goes through it: a change set fits only the text it was made for, and applying it checks no more
+than the length, so a history kept apart from its text could undo the wrong bytes.
+
+- `apply(transaction, now)` applies an edit and adds it to the pending revision, composed with the
+  edits before it. `set_selection` changes only the selection.
+- `commit()` ends the pending revision. The caller commits where
+  [0029](../decisions/0029-undo-insert-sessions.md) ends an undo step: on leaving Insert mode, on
+  the checkpoint command, on a cursor move that isn't typing, and after each Normal-mode command.
+- An edit that comes a second or more after the previous one commits the pending revision first.
+  The caller passes each edit's time, so `buffer-text` reads no clock and tests set the time.
+- A pending revision keeps a clone of the text and selection from before its first edit; text
+  clones share structure, so this is cheap. On commit, the composed edits and their inverse become
+  a revision. Edits that cancel out, like typing a char and deleting it, leave no revision.
+- Undo, redo, and jumps commit first.
+
+### Revisions
+
+Revisions form a tree. The root is the text the document started with. Every other revision keeps
+the transaction that made it from its parent, the one that undoes it, and the time of its last
+edit. An edit after an undo starts a new branch.
+
+| Method | Moves to |
+|---|---|
+| `undo()` | the parent, restoring the selection from before the revision |
+| `redo()` | the child made or visited last, restoring the selection after it |
+| `earlier(n)`, `later(n)` | `n` revisions back or forward in the order they were made, across branches (Vim `g-`/`g+`, Helix `Alt-u`/`Alt-U`) |
+| `earlier_by(d)` | the newest revision made at least `d` before the current one, or the root (`:earlier 10m`) |
+| `later_by(d)` | the newest revision made at most `d` after the current one (`:later 10m`) |
+
+- Each returns whether it moved: `undo` at the root and `redo` without a child return false.
+- Revisions sit in a `Vec` in the order they were made, so a parent comes before its children. A
+  jump undoes up to the newest common ancestor, found by stepping the later of the two revisions
+  to its parent, then points redo down to the target and redoes along it. Redo after any move
+  retraces the way back, as in Vim; Helix's redo goes to the newest child instead.
+- As long as the caller's times don't go backwards, revisions are made in time order, and a time
+  jump finds its target by binary search.
 
 ## Errors and panics
 
@@ -114,7 +156,9 @@ broken contract only our own bug can cause panics before anything changes.
 | `apply`, `invert`, `compose`: a text or change set of another length | panic |
 | `ChangeSet::map`: a position past the end of the text | panic |
 | `Transaction::new`: a selection past the end of the changed text | panic |
-| Internal: the primary range survives merging, and `compose` ends both lists together | panic (`expect`, `unreachable!`) |
+| `Document::apply`: a transaction made for a text of another length | panic, before the pending revision changes |
+| `Document::set_selection`: a selection past the end of the text | panic |
+| Internal: the primary range survives merging, `compose` ends both lists together, and redo never leads to the root | panic (`expect`, `unreachable!`) |
 | Internal: the mapper gets positions in order | `debug_assert!`; only `Selection::map` uses it, with sorted positions |
 
 ## Tests
@@ -126,3 +170,10 @@ Generated texts mix multi-byte chars, combining marks, emoji sequences, and line
 span several rope chunks. For selections, they check that merging covers exactly the given
 ranges, that mapping in one pass equals mapping each range alone, and that ranges no change
 touches keep their text.
+
+For documents, a property test runs random edits (with pauses around a second), commits, undos,
+redos, and jumps by count and by time. After each, the text must be exactly the text of the
+revision the history is at, pending edits must start from it, and a jump by count must land
+where it should; at the end, the oldest and the newest revision must be reachable. Unit tests pin
+the rules: the pause boundary, commit points, edits that cancel out, restored selections, redo
+after a jump into another branch, and the limits of time jumps.

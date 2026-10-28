@@ -3,6 +3,8 @@
 //! Pure: no egui, typst, or platform APIs.
 
 mod change;
+mod document;
+mod history;
 mod selection;
 #[cfg(test)]
 mod strategies;
@@ -10,6 +12,7 @@ mod text;
 mod transaction;
 
 pub use change::{Assoc, ChangeSet, InvalidChange};
+pub use document::Document;
 pub use selection::{Range, Selection};
 pub use text::Text;
 pub use transaction::Transaction;

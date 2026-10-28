@@ -38,6 +38,11 @@ pub fn text() -> impl Strategy<Value = String> {
     ]
 }
 
+/// Text to insert: up to three pieces.
+pub fn insert() -> impl Strategy<Value = String> {
+    vec(select(PIECES), 0..4).prop_map(|pieces| pieces.concat())
+}
+
 /// The char boundaries of `text`, including its end.
 pub fn char_boundaries(text: &str) -> Vec<usize> {
     text.char_indices()
@@ -49,8 +54,7 @@ pub fn char_boundaries(text: &str) -> Vec<usize> {
 /// Up to five changes to `text`: sorted, non-overlapping, and on char boundaries.
 pub fn changes(text: &str) -> impl Strategy<Value = Vec<Change>> + use<> {
     let boundaries = char_boundaries(text);
-    let insert = vec(select(PIECES), 0..4).prop_map(|pieces| pieces.concat());
-    let change = (select(boundaries.clone()), select(boundaries), insert);
+    let change = (select(boundaries.clone()), select(boundaries), insert());
     vec(change, 0..6).prop_map(|changes| {
         let mut offsets: Vec<usize> = changes.iter().flat_map(|(a, b, _)| [*a, *b]).collect();
         offsets.sort_unstable();
