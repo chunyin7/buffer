@@ -65,10 +65,11 @@ Mapping is monotonic: for one `assoc`, a later position never maps before an ear
 
 - A `Range` is two byte offsets, `anchor` and `head`, covering the half-open span from `start()`
   (the smaller) to `end()` (the larger). Extending a range moves its head.
-- A `Selection` is one or more ranges, one of them primary. `Selection::new` sorts them and merges
-  ranges that share a byte or start at the same offset; touching ranges, and an empty range at
-  another's end, stay apart. A merged range points backward only if both ranges did, and it is
-  primary if either was.
+- A `Selection` is one or more ranges, one of them primary. `Selection::new(primary, others)`
+  sorts them and merges ranges that share a byte or start at the same offset; touching ranges,
+  and an empty range at another's end, stay apart. A merged range points backward only if both
+  ranges did, and it is primary if either was. Taking the primary range itself means a selection
+  can't be empty or have a primary index past its ranges.
 - Ranges sit in a `SmallVec` with room for one, so a single-range selection doesn't allocate.
 - The block cursor, and the one-grapheme minimum in Normal mode, need grapheme boundaries; they
   land with the motions.
@@ -105,7 +106,6 @@ broken contract only our own bug can cause panics before anything changes.
 | `ChangeSet::new`: a range reversed, out of order, past the end, or splitting a char | `Err(InvalidChange)`; spans can be stale, so the caller recomputes |
 | `apply`, `invert`, `compose`: a text or change set of another length | panic |
 | `ChangeSet::map`: a position past the end of the text | panic |
-| `Selection::new`: a primary index out of bounds | panic |
 | `Transaction::new`: a selection past the end of the changed text | panic |
 | Internal: the primary range survives merging, and `compose` ends both lists together | panic (`expect`, `unreachable!`) |
 | Internal: the mapper gets positions in order | `debug_assert!`; only `Selection::map` uses it, with sorted positions |

@@ -4,7 +4,7 @@ use std::ops;
 
 use proptest::collection::vec;
 use proptest::prelude::*;
-use proptest::sample::{Index, select};
+use proptest::sample::select;
 
 use crate::Range;
 
@@ -78,19 +78,16 @@ pub fn text_and_two_changes() -> impl Strategy<Value = (String, Vec<Change>, Vec
     })
 }
 
-/// Up to five ranges on char boundaries of `text`, pointing either way, and a primary index.
-pub fn ranges(text: &str) -> impl Strategy<Value = (Vec<Range>, usize)> + use<> {
+/// A primary range and up to four others, on char boundaries of `text`, pointing either way.
+pub fn ranges(text: &str) -> impl Strategy<Value = (Range, Vec<Range>)> + use<> {
     let boundaries = char_boundaries(text);
     let range = (select(boundaries.clone()), select(boundaries))
         .prop_map(|(anchor, head)| Range::new(anchor, head));
-    (vec(range, 1..6), any::<Index>()).prop_map(|(ranges, primary)| {
-        let primary = primary.index(ranges.len());
-        (ranges, primary)
-    })
+    (range.clone(), vec(range, 0..5))
 }
 
-/// A text, changes to it, and ranges in it with a primary index.
-pub fn text_changes_and_ranges() -> impl Strategy<Value = (String, Vec<Change>, (Vec<Range>, usize))>
+/// A text, changes to it, and a primary range and others in it.
+pub fn text_changes_and_ranges() -> impl Strategy<Value = (String, Vec<Change>, (Range, Vec<Range>))>
 {
     text().prop_flat_map(|text| {
         let changes = changes(&text);

@@ -89,22 +89,14 @@ impl Selection {
         }
     }
 
-    /// A selection of `ranges` with the one at `primary_index` primary. Sorts the ranges and
-    /// merges overlapping ones; the primary is the range the primary ends up in.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `primary_index` is out of bounds, so also if `ranges` is empty.
-    pub fn new(ranges: impl IntoIterator<Item = Range>, primary_index: usize) -> Self {
-        let ranges: SmallVec<[Range; 1]> = ranges.into_iter().collect();
-        assert!(
-            primary_index < ranges.len(),
-            "primary index {primary_index} is out of bounds ({} ranges)",
-            ranges.len(),
-        );
+    /// A selection of `primary` and `others`. Sorts the ranges and merges overlapping ones; the
+    /// primary is the range `primary` ends up in. `others` may include `primary` again.
+    pub fn new(primary: Range, others: impl IntoIterator<Item = Range>) -> Self {
+        let mut ranges: SmallVec<[Range; 1]> = smallvec![primary];
+        ranges.extend(others);
         let mut selection = Self {
             ranges,
-            primary_index,
+            primary_index: 0,
         };
         selection.normalize();
         selection
@@ -214,7 +206,7 @@ mod tests {
 
     #[test]
     fn ranges_merge_when_they_share_a_byte_or_a_start() {
-        let merge = |a: Range, b: Range| Selection::new([a, b], 0).ranges().to_vec();
+        let merge = |a: Range, b: Range| Selection::new(a, [b]).ranges().to_vec();
         assert_eq!(
             merge(Range::new(0, 3), Range::new(2, 4)),
             [Range::new(0, 4)]
@@ -232,68 +224,67 @@ mod tests {
 
     #[test]
     fn merged_ranges_point_backward_only_if_both_do() {
-        let backward = Selection::new([Range::new(4, 1), Range::new(6, 3)], 0);
+        let backward = Selection::new(Range::new(4, 1), [Range::new(6, 3)]);
         assert_eq!(backward.ranges(), [Range::new(6, 1)]);
-        let mixed = Selection::new([Range::new(1, 4), Range::new(6, 3)], 0);
+        let mixed = Selection::new(Range::new(1, 4), [Range::new(6, 3)]);
         assert_eq!(mixed.ranges(), [Range::new(1, 6)]);
     }
 
-    /// Ranges over offsets 0..32 pointing either way, and a primary index.
-    fn ranges_and_primary() -> impl Strategy<Value = (Vec<Range>, usize)> {
+    /// A primary range and up to six others over offsets 0..32, pointing either way.
+    fn primary_and_others() -> impl Strategy<Value = (Range, Vec<Range>)> {
         let range = (0..32_usize, 0..32_usize).prop_map(|(anchor, head)| Range::new(anchor, head));
-        (vec(range, 1..8), any::<prop::sample::Index>()).prop_map(|(ranges, primary)| {
-            let primary = primary.index(ranges.len());
-            (ranges, primary)
-        })
+        (range.clone(), vec(range, 0..7))
     }
 
     proptest! {
         #[test]
-        fn new_sorts_and_merges((ranges, primary) in ranges_and_primary()) {
-            let selection = Selection::new(ranges.iter().copied(), primary);
+        fn new_sorts_and_merges((primary, others) in primary_and_others()) {
+            let selection = Selection::new(primary, others.iter().copied());
             let merged = selection.ranges();
             for pair in merged.windows(2) {
                 prop_assert!(pair[0].start() < pair[1].start() && pair[0].end() <= pair[1].start());
             }
             // Every range lands inside one merged range, and the primary inside the primary.
-            for range in &ranges {
+            let inputs: Vec<Range> = std::iter::once(primary).chain(others).collect();
+            for range in &inputs {
                 let inside = |merged: &Range| {
                     merged.start() <= range.start() && range.end() <= merged.end()
                 };
                 prop_assert!(merged.iter().any(inside));
             }
             let primary_range = selection.primary();
-            prop_assert!(primary_range.start() <= ranges[primary].start());
-            prop_assert!(ranges[primary].end() <= primary_range.end());
+            prop_assert!(primary_range.start() <= primary.start());
+            prop_assert!(primary.end() <= primary_range.end());
             // Merging covers no byte that no range covered.
             for merged in merged {
                 for byte in merged.start()..merged.end() {
-                    let covered = ranges.iter().any(|range| (range.start()..range.end()).contains(&byte));
-                    prop_assert!(covered, "{byte} in {merged:?} from {ranges:?}");
+                    let covered = inputs.iter().any(|range| (range.start()..range.end()).contains(&byte));
+                    prop_assert!(covered, "{byte} in {merged:?} from {inputs:?}");
                 }
             }
         }
 
         #[test]
         fn map_matches_mapping_each_range_alone(
-            (text, changes, (ranges, primary)) in strategies::text_changes_and_ranges(),
+            (text, changes, (primary, others)) in strategies::text_changes_and_ranges(),
         ) {
             let original = Text::from(text.as_str());
             let set = ChangeSet::new(&original, changes.iter().cloned()).unwrap();
-            let selection = Selection::new(ranges, primary);
-            let each_alone = selection.ranges().iter().map(|&range| {
-                Selection::single(range).map(&set).primary()
-            });
-            let expected = Selection::new(each_alone, selection.primary_index());
+            let selection = Selection::new(primary, others);
+            let alone = |range: Range| Selection::single(range).map(&set).primary();
+            let expected = Selection::new(
+                alone(selection.primary()),
+                selection.ranges().iter().map(|&range| alone(range)),
+            );
             prop_assert_eq!(selection.map(&set), expected);
         }
 
         #[test]
         fn map_keeps_the_text_of_untouched_ranges(
-            (text, changes, (ranges, _)) in strategies::text_changes_and_ranges(),
+            (text, changes, (primary, others)) in strategies::text_changes_and_ranges(),
         ) {
             let changed = strategies::apply(&text, &changes);
-            for range in ranges {
+            for range in std::iter::once(primary).chain(others) {
                 let touched = changes.iter().any(|(change, _)| {
                     change.end > range.start() && change.start < range.end()
                 });
