@@ -118,6 +118,9 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
 - **Lines = line breaks + 1.** `\n` and `\r\n` break lines; a lone `\r` doesn't. Every offset
   0..=len is on exactly one line, so `"foo\n"` has two lines and an empty note has one. The Vim
   preset keeps its cursor off the empty line after a final break.
+- **Undo: one revision per Insert session, split by pauses.** A checkpoint command, a cursor move
+  that isn't typing, or a typing pause of 1 s or more starts a new revision; the pause is checked
+  when the next edit arrives (no timer). History stays in memory and dies with its buffer.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.

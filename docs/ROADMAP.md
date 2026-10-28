@@ -144,7 +144,6 @@ Docs: `docs/platforms/ipados.md`.
 | Question | Decide by |
 |---|---|
 | Autosave policy (idle debounce, focus loss, or explicit `:w` only) | M1 |
-| Undo granularity in Insert mode; persist undo history across sessions? | M1 |
 | Where pasted images go (vault root, `attachments/`, honor Obsidian's setting) | M2 |
 | Duplicate note names: resolution order and UI | M2 |
 | Fonts: bundled vs system for UI, monospace, and typst (the math font alone is 1.3 MB) | M3 |
