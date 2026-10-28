@@ -33,35 +33,66 @@ pub struct ChangeSet {
     len_after: usize,
 }
 
+/// Why [`ChangeSet::new`] rejected a change.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidChange {
+    #[error("change {range:?} ends before it starts")]
+    Reversed { range: Range<usize> },
+    #[error("change {range:?} starts before the previous change ends at {previous_end}")]
+    OutOfOrder {
+        range: Range<usize>,
+        previous_end: usize,
+    },
+    #[error("change {range:?} runs past the end of the text at {len}")]
+    PastEnd { range: Range<usize>, len: usize },
+    #[error("change {range:?} splits a char")]
+    SplitsChar { range: Range<usize> },
+}
+
 impl ChangeSet {
     /// A change set that replaces each range of `text` with its string: an empty range inserts,
-    /// an empty string deletes.
+    /// an empty string deletes. The ranges must be sorted and must not overlap; they may touch,
+    /// and several empty ranges may share an offset.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the ranges are out of order, overlap, run past the end of `text`, or split a
-    /// char. Ranges may touch, and several empty ranges may share an offset.
-    pub fn new(text: &Text, changes: impl IntoIterator<Item = (Range<usize>, String)>) -> Self {
+    /// Returns [`InvalidChange`] for the first range that is reversed, starts before the previous
+    /// one ends, runs past the end of `text`, or splits a char. Spans computed from an older
+    /// snapshot of the text can do any of that, so the caller recomputes them.
+    pub fn new(
+        text: &Text,
+        changes: impl IntoIterator<Item = (Range<usize>, String)>,
+    ) -> Result<Self, InvalidChange> {
         let changes = changes.into_iter();
         let mut set = Self::with_capacity(2 * changes.size_hint().0 + 1);
         let mut position = 0;
         for (range, insert) in changes {
-            assert!(
-                position <= range.start && range.start <= range.end && range.end <= text.len(),
-                "change {range:?} is out of order, reversed, or past the end ({} bytes)",
-                text.len(),
-            );
-            assert!(
-                text.is_char_boundary(range.start) && text.is_char_boundary(range.end),
-                "change {range:?} splits a char",
-            );
+            // In this order, `is_char_boundary` only sees offsets inside the text.
+            if range.start > range.end {
+                return Err(InvalidChange::Reversed { range });
+            }
+            if range.start < position {
+                return Err(InvalidChange::OutOfOrder {
+                    range,
+                    previous_end: position,
+                });
+            }
+            if range.end > text.len() {
+                return Err(InvalidChange::PastEnd {
+                    range,
+                    len: text.len(),
+                });
+            }
+            if !text.is_char_boundary(range.start) || !text.is_char_boundary(range.end) {
+                return Err(InvalidChange::SplitsChar { range });
+            }
             set.retain(range.start - position);
             set.insert(insert);
             set.delete(range.end - range.start);
             position = range.end;
         }
         set.retain(text.len() - position);
-        set
+        Ok(set)
     }
 
     /// The length of the text before the change.
@@ -385,7 +416,7 @@ mod tests {
     use crate::strategies::{self, Change};
 
     fn change_set(text: &Text, changes: &[Change]) -> ChangeSet {
-        ChangeSet::new(text, changes.iter().cloned())
+        ChangeSet::new(text, changes.iter().cloned()).expect("generated changes are valid")
     }
 
     fn applied(text: &Text, changes: &ChangeSet) -> Text {
@@ -415,8 +446,39 @@ mod tests {
     }
 
     #[test]
+    fn new_rejects_invalid_changes() {
+        // "abé": 'é' is bytes 2..4.
+        let text = Text::from("abé");
+        let reject = |changes: Vec<Change>| ChangeSet::new(&text, changes).unwrap_err();
+        let reversed = Range { start: 2, end: 1 };
+        assert_eq!(
+            reject(vec![(reversed.clone(), String::new())]),
+            InvalidChange::Reversed { range: reversed }
+        );
+        assert_eq!(
+            reject(vec![(1..2, String::new()), (0..1, String::new())]),
+            InvalidChange::OutOfOrder {
+                range: 0..1,
+                previous_end: 2
+            }
+        );
+        // Past the end wins over a split char, and nothing panics on the out-of-bounds offset.
+        assert_eq!(
+            reject(vec![(3..5, String::new())]),
+            InvalidChange::PastEnd {
+                range: 3..5,
+                len: 4
+            }
+        );
+        assert_eq!(
+            reject(vec![(0..3, String::new())]),
+            InvalidChange::SplitsChar { range: 0..3 }
+        );
+    }
+
+    #[test]
     fn map_at_an_insert_follows_assoc() {
-        let set = ChangeSet::new(&Text::from("abcd"), [(2..2, "XY".to_owned())]);
+        let set = ChangeSet::new(&Text::from("abcd"), [(2..2, "XY".to_owned())]).unwrap();
         assert_eq!(set.map(2, Assoc::Before), 2);
         assert_eq!(set.map(2, Assoc::After), 4);
     }
@@ -424,7 +486,7 @@ mod tests {
     #[test]
     fn map_inside_a_delete_goes_where_it_was() {
         // "abcdef" -> "aef"
-        let set = ChangeSet::new(&Text::from("abcdef"), [(1..4, String::new())]);
+        let set = ChangeSet::new(&Text::from("abcdef"), [(1..4, String::new())]).unwrap();
         for position in 1..4 {
             assert_eq!(set.map(position, Assoc::Before), 1);
             assert_eq!(set.map(position, Assoc::After), 1);
@@ -435,7 +497,7 @@ mod tests {
     #[test]
     fn map_in_a_replacement() {
         // "abcdef" -> "aXYef"
-        let set = ChangeSet::new(&Text::from("abcdef"), [(1..4, "XY".to_owned())]);
+        let set = ChangeSet::new(&Text::from("abcdef"), [(1..4, "XY".to_owned())]).unwrap();
         assert_eq!(set.map(1, Assoc::Before), 1);
         assert_eq!(set.map(1, Assoc::After), 1);
         assert_eq!(set.map(2, Assoc::Before), 1);

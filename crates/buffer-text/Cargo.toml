@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 crop = { workspace = true, features = ["simd"] }
 smallvec.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 proptest = { workspace = true, features = ["std"] }

@@ -176,7 +176,7 @@ mod tests {
     use crate::strategies::{self, Change};
 
     fn mapped(text: &str, changes: &[Change], range: Range) -> Range {
-        let changes = ChangeSet::new(&Text::from(text), changes.iter().cloned());
+        let changes = ChangeSet::new(&Text::from(text), changes.iter().cloned()).unwrap();
         Selection::single(range).map(&changes).primary()
     }
 
@@ -279,7 +279,7 @@ mod tests {
             (text, changes, (ranges, primary)) in strategies::text_changes_and_ranges(),
         ) {
             let original = Text::from(text.as_str());
-            let set = ChangeSet::new(&original, changes.iter().cloned());
+            let set = ChangeSet::new(&original, changes.iter().cloned()).unwrap();
             let selection = Selection::new(ranges, primary);
             let each_alone = selection.ranges().iter().map(|&range| {
                 Selection::single(range).map(&set).primary()

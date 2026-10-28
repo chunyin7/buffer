@@ -19,8 +19,7 @@ objects, and registers land later in M1.
 
 - Positions are UTF-8 byte offsets from 0 to the text's length, inclusive. Conversion to chars,
   graphemes, or UTF-16 happens only at layout, IME, and platform boundaries.
-- An edit starts and ends on char boundaries; `ChangeSet::new` panics otherwise, since a position
-  inside a char is a bug in the caller.
+- An edit starts and ends on char boundaries; `ChangeSet::new` rejects one that doesn't.
 
 ## Change sets
 
@@ -35,7 +34,9 @@ A `ChangeSet` is an edit to a whole text: operations that walk the text from sta
 - Retains and deletes add up to the length before the change; retains and inserts, to the length
   after it.
 - `ChangeSet::new(text, changes)` builds one from `(range, replacement)` pairs, sorted and not
-  overlapping: an empty range inserts, an empty replacement deletes.
+  overlapping: an empty range inserts, an empty replacement deletes. It returns `InvalidChange`
+  for the first range that is reversed, starts before the previous one ends, runs past the end,
+  or splits a char.
 - Canonical form: no operation is empty, adjacent operations differ in kind, and at one position
   an insert comes before a delete. Equal edits compare equal, and a delete right after an insert
   is always the bytes that insert replaces.
@@ -93,6 +94,21 @@ A `Transaction` is one edit: a change set and the selection after it.
 - `compose(next)` combines two transactions into one with both changes and `next`'s selection;
   Insert-mode sessions will compose this way into a single revision
   ([0029](../decisions/0029-undo-insert-sessions.md)).
+
+## Errors and panics
+
+Per [0030](../decisions/0030-panics-and-results.md), input that can be stale gets an error, and a
+broken contract only our own bug can cause panics before anything changes.
+
+| Check | On failure |
+|---|---|
+| `ChangeSet::new`: a range reversed, out of order, past the end, or splitting a char | `Err(InvalidChange)`; spans can be stale, so the caller recomputes |
+| `apply`, `invert`, `compose`: a text or change set of another length | panic |
+| `ChangeSet::map`: a position past the end of the text | panic |
+| `Selection::new`: a primary index out of bounds | panic |
+| `Transaction::new`: a selection past the end of the changed text | panic |
+| Internal: the primary range survives merging, and `compose` ends both lists together | panic (`expect`, `unreachable!`) |
+| Internal: the mapper gets positions in order | `debug_assert!`; only `Selection::map` uses it, with sorted positions |
 
 ## Tests
 

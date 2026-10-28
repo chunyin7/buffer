@@ -148,9 +148,11 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
 - **File watching: notify 8** (stable), debounced.
 - **Logging/profiling:** `log` facade; `profiling` scopes with a puffin backend behind a cargo
   feature (the same facades egui uses).
-- **Errors:** `thiserror` in library crates. Math/highlight/image workers run under
-  `catch_unwind`, and release builds keep `panic = "unwind"`, so a renderer bug can't take down
-  unsaved text.
+- **Errors:** `thiserror` in library crates. A broken contract only our own bug can cause
+  panics before anything is mutated; input that can be stale through no caller bug (spans from a
+  snapshot, another thread, the platform) gets a `Result`. A check that guards text bytes is
+  never `debug_assert!` only. Math/highlight/image workers run under `catch_unwind`, and release
+  builds keep `panic = "unwind"`, so a renderer bug can't take down unsaved text.
 - **Whiteboard (later):** pen pressure/tilt needs winit 0.31 (beta: Wayland, Windows, Web, iOS
   Apple Pencil); egui 0.37 still uses winit 0.30. Ink input must carry pressure, tilt, and
   timestamps from the start.

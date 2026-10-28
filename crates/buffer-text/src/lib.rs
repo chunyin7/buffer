@@ -9,7 +9,7 @@ mod strategies;
 mod text;
 mod transaction;
 
-pub use change::{Assoc, ChangeSet};
+pub use change::{Assoc, ChangeSet, InvalidChange};
 pub use selection::{Range, Selection};
 pub use text::Text;
 pub use transaction::Transaction;

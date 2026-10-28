@@ -65,3 +65,4 @@ Each rejected option with the reason. Omit the section if none were weighed.
 | [0027](0027-helix-selection-ranges.md) | Selections are Helix-style ranges |
 | [0028](0028-lines-are-breaks-plus-one.md) | A text has one more line than line breaks |
 | [0029](0029-undo-insert-sessions.md) | Undo per Insert session, split by pauses; history in memory |
+| [0030](0030-panics-and-results.md) | Panic on broken contracts, Result for stale input |

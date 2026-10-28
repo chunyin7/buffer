@@ -47,6 +47,10 @@ clippy and tests on Linux, macOS, and Windows, all with `--locked`.
   `unimplemented!`, or print macros (output goes through `log`).
 - An exception names its reason: `#[expect(clippy::expect_used, reason = "…")]`. Prefer
   `#[expect]` to `#[allow]`: it warns once the exception is no longer needed.
+- Panic only on a broken contract that a bug in our own code causes: `assert!` before anything
+  is mutated, with a `# Panics` doc section. Input that can be stale through no caller bug
+  returns a `Result`. A check that guards text bytes is never `debug_assert!` only
+  ([0030](docs/decisions/0030-panics-and-results.md)).
 - `unsafe` is denied. Exceptions belong in platform glue only, with `// SAFETY:` comments.
 - rustfmt pins `style_edition = "2024"` and otherwise uses the defaults.
 - The invariants in AGENTS.md (byte-identical saves, byte offsets, O(visible) frames, idle is

@@ -232,6 +232,7 @@ dependencies = [
  "crop",
  "proptest",
  "smallvec",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
