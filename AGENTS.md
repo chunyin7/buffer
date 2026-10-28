@@ -115,6 +115,9 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
   primary. The block cursor is the grapheme at the head, or the one before it when the range
   points forward. Normal mode keeps ranges at least one grapheme wide; Insert mode allows empty
   ones. Vim's cursor is a one-grapheme range, and operator + motion selects, then acts.
+- **Lines = line breaks + 1.** `\n` and `\r\n` break lines; a lone `\r` doesn't. Every offset
+  0..=len is on exactly one line, so `"foo\n"` has two lines and an empty note has one. The Vim
+  preset keeps its cursor off the empty line after a final break.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.

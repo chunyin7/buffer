@@ -63,3 +63,4 @@ Each rejected option with the reason. Omit the section if none were weighed.
 | [0025](0025-crate-architecture.md) | Crate architecture |
 | [0026](0026-dependency-policy.md) | Dependency policy |
 | [0027](0027-helix-selection-ranges.md) | Selections are Helix-style ranges |
+| [0028](0028-lines-are-breaks-plus-one.md) | A text has one more line than line breaks |
