@@ -1,10 +1,11 @@
 # Editing model
 
 How `buffer-text` holds a note's text and changes it. The decisions behind it:
-[0016](../decisions/0016-crop-rope.md) (crop rope) and
-[0017](../decisions/0017-selection-based-core.md) (selection-based core).
+[0016](../decisions/0016-crop-rope.md) (crop rope),
+[0017](../decisions/0017-selection-based-core.md) (selection-based core), and
+[0027](../decisions/0027-helix-selection-ranges.md) (Helix-style ranges).
 
-Status: text and change sets exist. Selections, transactions, history, lines, motions, text
+Status: text, change sets, selections, and transactions exist. History, lines, motions, text
 objects, and registers land later in M1.
 
 ## Text
@@ -59,10 +60,46 @@ A `ChangeSet` is an edit to a whole text: operations that walk the text from sta
 
 Mapping is monotonic: for one `assoc`, a later position never maps before an earlier one.
 
+## Selections
+
+- A `Range` is two byte offsets, `anchor` and `head`, covering the half-open span from `start()`
+  (the smaller) to `end()` (the larger). Extending a range moves its head.
+- A `Selection` is one or more ranges, one of them primary. `Selection::new` sorts them and merges
+  ranges that share a byte or start at the same offset; touching ranges, and an empty range at
+  another's end, stay apart. A merged range points backward only if both ranges did, and it is
+  primary if either was.
+- Ranges sit in a `SmallVec` with room for one, so a single-range selection doesn't allocate.
+- The block cursor, and the one-grapheme minimum in Normal mode, need grapheme boundaries; they
+  land with the motions.
+
+### Mapping selections
+
+`Selection::map(changes)` maps every range, then merges ranges that now overlap.
+
+- A range's start maps with `Assoc::After` and its end with `Assoc::Before`, so text inserted at
+  either edge stays outside it, and a replaced range covers the new text.
+- An empty range maps with `Assoc::After`: typing at a cursor moves it past the typed text.
+- A range inside replaced bytes covers the new text, keeping its direction.
+- Sorted, non-overlapping ranges give positions in order, so the mapping is one pass over the
+  change set and the ranges together.
+
+## Transactions
+
+A `Transaction` is one edit: a change set and the selection after it.
+
+- `apply(text, selection)` applies the change and sets the selection.
+- `invert(original, selection_before)` returns the transaction that undoes it, restoring both the
+  text and the selection before.
+- `compose(next)` combines two transactions into one with both changes and `next`'s selection;
+  Insert-mode sessions will compose this way into a single revision
+  ([0029](../decisions/0029-undo-insert-sessions.md)).
+
 ## Tests
 
 Property tests (proptest) in `buffer-text` check change sets against a plain `String` model:
 `apply` matches it, `invert` restores the original, `compose` equals applying both in turn,
 mapping keeps untouched chars in place and is monotonic, and every result is canonical.
 Generated texts mix multi-byte chars, combining marks, emoji sequences, and line breaks, and some
-span several rope chunks.
+span several rope chunks. For selections, they check that merging covers exactly the given
+ranges, that mapping in one pass equals mapping each range alone, and that ranges no change
+touches keep their text.

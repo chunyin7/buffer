@@ -14,7 +14,7 @@ Code should always prioritise human readability and understandability. We want t
 
 - Pre-alpha: licenses, the workspace with the target crate layout, lints, cargo-deny, CI, and the
   README, CONTRIBUTING, architecture doc, and ADRs are in place. `buffer-app` opens an empty
-  window, and `buffer-text` has text and change sets
+  window, and `buffer-text` has text, change sets, selections, and transactions
   ([docs/editor/model.md](docs/editor/model.md)). Everything else below is decided, not
   implemented, unless marked otherwise.
 - Current milestone: **M0 Foundations**; **M1 Editing** has started in `buffer-text`. Milestones

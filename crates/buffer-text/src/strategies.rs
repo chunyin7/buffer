@@ -1,13 +1,15 @@
 //! Proptest strategies shared by the unit tests.
 
-use std::ops::Range;
+use std::ops;
 
 use proptest::collection::vec;
 use proptest::prelude::*;
-use proptest::sample::select;
+use proptest::sample::{Index, select};
+
+use crate::Range;
 
 /// A replacement: the byte range it replaces and the text it inserts.
-pub type Change = (Range<usize>, String);
+pub type Change = (ops::Range<usize>, String);
 
 /// Pieces of text: multi-byte chars, a combining mark, emoji sequences, and line breaks.
 const PIECES: &[&str] = &[
@@ -73,6 +75,27 @@ pub fn text_and_two_changes() -> impl Strategy<Value = (String, Vec<Change>, Vec
     text_and_changes().prop_flat_map(|(text, first)| {
         let second = changes(&apply(&text, &first));
         (Just(text), Just(first), second)
+    })
+}
+
+/// Up to five ranges on char boundaries of `text`, pointing either way, and a primary index.
+pub fn ranges(text: &str) -> impl Strategy<Value = (Vec<Range>, usize)> + use<> {
+    let boundaries = char_boundaries(text);
+    let range = (select(boundaries.clone()), select(boundaries))
+        .prop_map(|(anchor, head)| Range::new(anchor, head));
+    (vec(range, 1..6), any::<Index>()).prop_map(|(ranges, primary)| {
+        let primary = primary.index(ranges.len());
+        (ranges, primary)
+    })
+}
+
+/// A text, changes to it, and ranges in it with a primary index.
+pub fn text_changes_and_ranges() -> impl Strategy<Value = (String, Vec<Change>, (Vec<Range>, usize))>
+{
+    text().prop_flat_map(|text| {
+        let changes = changes(&text);
+        let ranges = ranges(&text);
+        (Just(text), changes, ranges)
     })
 }
 
