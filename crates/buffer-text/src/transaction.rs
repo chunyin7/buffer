@@ -33,7 +33,7 @@ impl Transaction {
     /// # Panics
     ///
     /// Panics if `text` doesn't have the length the change set was made for.
-    pub fn apply(&self, text: &mut Text, selection: &mut Selection) {
+    pub(crate) fn apply(&self, text: &mut Text, selection: &mut Selection) {
         self.changes.apply(text);
         selection.clone_from(&self.selection);
     }

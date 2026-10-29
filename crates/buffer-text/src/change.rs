@@ -117,7 +117,7 @@ impl ChangeSet {
     /// # Panics
     ///
     /// Panics if `text` doesn't have the length this change set was made for.
-    pub fn apply(&self, text: &mut Text) {
+    pub(crate) fn apply(&self, text: &mut Text) {
         assert_eq!(
             text.len(),
             self.len_before,

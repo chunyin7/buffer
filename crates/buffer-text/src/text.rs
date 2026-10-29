@@ -6,8 +6,8 @@ use crop::Rope;
 /// UTF-8 text in a rope, addressed by byte offsets.
 ///
 /// Clones are cheap and share structure (copy-on-write), so background work can read a snapshot
-/// while the UI thread keeps editing. The only way to change a `Text` is
-/// [`ChangeSet::apply`](crate::ChangeSet::apply), so every edit can be recorded and inverted.
+/// while the UI thread keeps editing. Outside this crate, only a [`Document`](crate::Document)
+/// changes a `Text`, so every edit lands in its history.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Text {
     rope: Rope,

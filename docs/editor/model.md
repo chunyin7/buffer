@@ -15,7 +15,8 @@ Lines, motions, text objects, and registers land later in M1.
 - `Text` holds UTF-8 in a `crop` rope. No other crate depends on `crop`, so a later switch stays
   inside `buffer-text`.
 - Clones are cheap and copy-on-write: a background worker takes a snapshot by cloning.
-- A `Text` changes only through `ChangeSet::apply`, so every edit can be recorded and inverted.
+- A `Text` changes only through `ChangeSet::apply`, which is crate-private: outside
+  `buffer-text`, only a `Document` changes a text, so every edit lands in its history.
 
 ## Positions
 
@@ -42,7 +43,8 @@ A `ChangeSet` is an edit to a whole text: operations that walk the text from sta
 - Canonical form: no operation is empty, adjacent operations differ in kind, and at one position
   an insert comes before a delete. Equal edits compare equal, and a delete right after an insert
   is always the bytes that insert replaces.
-- `apply` edits a `Text`, one rope edit per insert, delete, or insert-and-delete pair.
+- `apply` (crate-private) edits a `Text`, one rope edit per insert, delete, or insert-and-delete
+  pair.
 - `invert(original)` returns the change set that undoes it: retains stay, deletes become inserts
   of the original bytes, and inserts become deletes.
 - `a.compose(b)`, where `b` was made for the text `a` produces, returns one change set with the
@@ -98,7 +100,8 @@ Mapping is monotonic: for one `assoc`, a later position never maps before an ear
 
 A `Transaction` is one edit: a change set and the selection after it.
 
-- `apply(text, selection)` applies the change and sets the selection.
+- `apply(text, selection)` (crate-private) applies the change and sets the selection; a document
+  applies its edits, undos, and redos this way.
 - `invert(original, selection_before)` returns the transaction that undoes it, restoring both the
   text and the selection before.
 - `compose(next)` combines two transactions into one with both changes and `next`'s selection;
@@ -110,6 +113,8 @@ A `Document` owns a text, its selection, and its undo history
 ([0031](../decisions/0031-document-owns-history.md)). Every edit and every move through history
 goes through it: a change set fits only the text it was made for, and applying it checks no more
 than the length, so a history kept apart from its text could undo the wrong bytes.
+`ChangeSet::apply` and `Transaction::apply` are crate-private, so code outside `buffer-text` can't
+edit a text any other way.
 
 - `apply(transaction, now)` applies an edit and adds it to the pending revision, composed with the
   edits before it. `set_selection` changes only the selection.
