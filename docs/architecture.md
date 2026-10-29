@@ -103,10 +103,10 @@ graph LR
 
 - Text lives in a `crop` rope behind `buffer-text`. Positions are UTF-8 byte offsets, converted to
   chars, graphemes, or UTF-16 only at layout, IME, and platform boundaries.
-- Commands apply transactions to a `Document`: a transaction is a change set plus the resulting
-  selections ([0017](decisions/0017-selection-based-core.md)), and a document owns the text, its
-  selection, and its undo history, a revision tree
-  ([0031](decisions/0031-document-owns-history.md)). Selections map through changes.
+- Commands edit a `Document` with ranges and replacements. It owns the text, its selection, and
+  its undo history, a revision tree ([0031](decisions/0031-document-owns-history.md)), and turns
+  each edit into a transaction: a change set plus the resulting selections
+  ([0017](decisions/0017-selection-based-core.md)). Selections map through changes.
 - Saves are atomic (temp file in the same dir, fsync, rename) and run on the IO worker. Open +
   save without edits is byte-identical. Programmatic edits (tags, link rewrites on rename) patch
   byte spans.

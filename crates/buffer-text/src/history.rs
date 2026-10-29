@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
-use crate::{Selection, Text, Transaction};
+use crate::transaction::Transaction;
+use crate::{Selection, Text};
 
 /// The revisions of a text, as a tree.
 ///

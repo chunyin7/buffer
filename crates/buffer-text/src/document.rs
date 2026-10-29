@@ -1,15 +1,18 @@
+use std::ops;
 use std::time::{Duration, Instant};
 
 use crate::history::History;
-use crate::{Range, Selection, Text, Transaction};
+use crate::transaction::Transaction;
+use crate::{ChangeSet, InvalidChange, Range, Selection, Text};
 
 /// An edit this long or longer after the previous one starts a new revision (ADR 0029).
 const PAUSE: Duration = Duration::from_secs(1);
 
 /// A text, its selection, and its undo history.
 ///
-/// Every edit, undo, and redo goes through the document, so the history always fits the text: a
-/// change set fits only the text it was made for, and applying it checks no more than the length.
+/// Every edit, undo, and redo goes through the document, and it builds every change set from its
+/// own text. A change set fits only the text it was made for, and applying one checks no more
+/// than the length, so one made for another text could edit the wrong bytes or fail halfway.
 ///
 /// Edits accumulate into a pending revision until a commit point ends it: a call to
 /// [`commit`](Self::commit), or an edit that comes a second or more after the previous one. The
@@ -69,20 +72,51 @@ impl Document {
         self.selection = selection;
     }
 
-    /// Applies `transaction`, made for the current text at `now`, and adds it to the pending
-    /// revision. If the previous edit came a second or more before `now`, the pending revision is
-    /// committed first and this edit starts a new one.
+    /// Replaces each range of the text with its string at `now`, and maps the selection through
+    /// the change ([`Selection::map`]). An empty range inserts and an empty string deletes. The
+    /// ranges must be sorted and must not overlap; they may touch, and several empty ranges may
+    /// share an offset.
+    ///
+    /// The edit joins the pending revision. If the previous edit came a second or more before
+    /// `now`, the pending revision is committed first and this edit starts a new one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidChange`] for the first range that is reversed, starts before the previous
+    /// one ends, runs past the end of the text, or splits a char. Nothing changes then: the text,
+    /// the selection, and the pending revision stay as they were. Spans computed from an older
+    /// snapshot of the text can do any of that, so the caller recomputes them.
+    pub fn edit(
+        &mut self,
+        changes: impl IntoIterator<Item = (ops::Range<usize>, String)>,
+        now: Instant,
+    ) -> Result<(), InvalidChange> {
+        let selection = self.selection.clone();
+        self.edit_with(changes, |changes| selection.map(changes), now)
+    }
+
+    /// Like [`edit`](Self::edit), but the selection after the change is the one `selection`
+    /// returns, given the change set to map positions through: a paste, say, selects the pasted
+    /// text.
+    ///
+    /// # Errors
+    ///
+    /// As for [`edit`](Self::edit); `selection` isn't called then.
     ///
     /// # Panics
     ///
-    /// Panics if `transaction` was made for a text of another length.
-    pub fn apply(&mut self, transaction: Transaction, now: Instant) {
-        // Checked here, before the pending revision changes, not only in `Transaction::apply`.
-        assert_eq!(
-            transaction.changes().len_before(),
-            self.text.len(),
-            "transaction applied to a text of another length",
-        );
+    /// Panics if `selection` returns a selection that ends past the changed text. Nothing has
+    /// changed by then.
+    pub fn edit_with(
+        &mut self,
+        changes: impl IntoIterator<Item = (ops::Range<usize>, String)>,
+        selection: impl FnOnce(&ChangeSet) -> Selection,
+        now: Instant,
+    ) -> Result<(), InvalidChange> {
+        // Whatever can fail comes first, so a rejected edit doesn't even commit on a pause.
+        let changes = ChangeSet::new(&self.text, changes)?;
+        let selection = selection(&changes);
+        let transaction = Transaction::new(changes, selection);
         let paused = self
             .pending
             .as_ref()
@@ -111,6 +145,7 @@ impl Document {
             }
         };
         self.pending = Some(pending);
+        Ok(())
     }
 
     /// Ends the pending revision, so the next edit starts a new one. The caller commits where an
@@ -177,22 +212,22 @@ impl Document {
 
 #[cfg(test)]
 mod tests {
-    use std::ops;
-
     use proptest::collection::vec;
     use proptest::prelude::*;
     use proptest::sample::Index;
 
     use super::*;
+    use crate::Assoc;
     use crate::strategies;
-    use crate::{Assoc, ChangeSet};
 
     /// Replaces `range` with `insert` at `now`, leaving a cursor after the new text.
     fn replace(document: &mut Document, range: ops::Range<usize>, insert: &str, now: Instant) {
         let end = range.end;
-        let changes = ChangeSet::new(document.text(), [(range, insert.to_owned())]).unwrap();
-        let cursor = Range::point(changes.map(end, Assoc::After));
-        document.apply(Transaction::new(changes, Selection::single(cursor)), now);
+        let cursor =
+            |changes: &ChangeSet| Selection::single(Range::point(changes.map(end, Assoc::After)));
+        document
+            .edit_with([(range, insert.to_owned())], cursor, now)
+            .unwrap();
     }
 
     fn type_at_end(document: &mut Document, insert: &str, now: Instant) {
@@ -240,6 +275,24 @@ mod tests {
         replace(&mut document, 1..2, "", now);
         assert!(!document.undo());
         assert_eq!(text(&document), "a");
+    }
+
+    #[test]
+    fn a_rejected_edit_changes_nothing() {
+        let start = Instant::now();
+        let mut document = Document::new(Text::from("aé"), start);
+        type_at_end(&mut document, "b", start);
+        let selection = document.selection().clone();
+        // Offset 2 is inside 'é'. The edit comes 2 s after "b", so it would end "b"'s revision if
+        // the pause were checked first.
+        let rejected = document.edit([(2..2, "Z".to_owned())], start + Duration::from_secs(2));
+        assert_eq!(rejected, Err(InvalidChange::SplitsChar { range: 2..2 }));
+        assert_eq!(text(&document), "aéb");
+        assert_eq!(document.selection(), &selection);
+        // "b" is still pending: an edit right after it joins its revision.
+        type_at_end(&mut document, "c", start);
+        assert!(document.undo());
+        assert_eq!(text(&document), "aé");
     }
 
     #[test]
@@ -374,9 +427,7 @@ mod tests {
                 let start = boundaries[start.index(boundaries.len())];
                 let end = boundaries[end.index(boundaries.len())];
                 let range = start.min(end)..start.max(end);
-                let changes = ChangeSet::new(document.text(), [(range, insert.clone())]).unwrap();
-                let selection = document.selection().clone().map(&changes);
-                document.apply(Transaction::new(changes, selection), *now);
+                document.edit([(range, insert.clone())], *now).unwrap();
             }
             Action::Commit => document.commit(),
             Action::Undo => _ = document.undo(),

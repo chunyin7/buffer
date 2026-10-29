@@ -22,11 +22,13 @@ Lines, motions, text objects, and registers land later in M1.
 
 - Positions are UTF-8 byte offsets from 0 to the text's length, inclusive. Conversion to chars,
   graphemes, or UTF-16 happens only at layout, IME, and platform boundaries.
-- An edit starts and ends on char boundaries; `ChangeSet::new` rejects one that doesn't.
+- An edit starts and ends on char boundaries; `Document::edit` rejects one that doesn't.
 
 ## Change sets
 
-A `ChangeSet` is an edit to a whole text: operations that walk the text from start to end.
+A `ChangeSet` is an edit to a whole text: operations that walk the text from start to end. A
+`Document` builds one from its own text for each edit. Only `map`, `len_before`, `len_after`, and
+`is_identity` are public, so the caller of `Document::edit_with` can map positions through it.
 
 | Operation | Effect |
 |---|---|
@@ -43,8 +45,7 @@ A `ChangeSet` is an edit to a whole text: operations that walk the text from sta
 - Canonical form: no operation is empty, adjacent operations differ in kind, and at one position
   an insert comes before a delete. Equal edits compare equal, and a delete right after an insert
   is always the bytes that insert replaces.
-- `apply` (crate-private) edits a `Text`, one rope edit per insert, delete, or insert-and-delete
-  pair.
+- `apply` edits a `Text`, one rope edit per insert, delete, or insert-and-delete pair.
 - `invert(original)` returns the change set that undoes it: retains stay, deletes become inserts
   of the original bytes, and inserts become deletes.
 - `a.compose(b)`, where `b` was made for the text `a` produces, returns one change set with the
@@ -98,10 +99,11 @@ Mapping is monotonic: for one `assoc`, a later position never maps before an ear
 
 ## Transactions
 
-A `Transaction` is one edit: a change set and the selection after it.
+A `Transaction` is one edit: a change set and the selection after it. It is internal to
+`buffer-text`: a document makes one for each edit, and its history keeps them.
 
-- `apply(text, selection)` (crate-private) applies the change and sets the selection; a document
-  applies its edits, undos, and redos this way.
+- `apply(text, selection)` applies the change and sets the selection; a document applies its
+  edits, undos, and redos this way.
 - `invert(original, selection_before)` returns the transaction that undoes it, restoring both the
   text and the selection before.
 - `compose(next)` combines two transactions into one with both changes and `next`'s selection;
@@ -111,13 +113,17 @@ A `Transaction` is one edit: a change set and the selection after it.
 
 A `Document` owns a text, its selection, and its undo history
 ([0031](../decisions/0031-document-owns-history.md)). Every edit and every move through history
-goes through it: a change set fits only the text it was made for, and applying it checks no more
-than the length, so a history kept apart from its text could undo the wrong bytes.
-`ChangeSet::apply` and `Transaction::apply` are crate-private, so code outside `buffer-text` can't
-edit a text any other way.
+goes through it, and it builds every change set from its own text: a change set fits only the
+text it was made for, and applying it checks no more than the length, so one made for another
+text could edit the wrong bytes, or panic halfway and leave the text out of step with its history.
 
-- `apply(transaction, now)` applies an edit and adds it to the pending revision, composed with the
-  edits before it. `set_selection` changes only the selection.
+- `edit(changes, now)` takes `(range, replacement)` pairs, as `ChangeSet::new` does, and maps the
+  selection through the change. `edit_with(changes, selection, now)` sets the selection to what
+  `selection` returns, given the change set: a paste, say, selects the pasted text.
+- Both check the ranges against the current text before anything changes. A stale one gets
+  `Err(InvalidChange)`, and the text, the selection, and the pending revision stay as they were.
+- An edit joins the pending revision, composed with the edits before it. `set_selection` changes
+  only the selection.
 - `commit()` ends the pending revision. The caller commits where
   [0029](../decisions/0029-undo-insert-sessions.md) ends an undo step: on leaving Insert mode, on
   the checkpoint command, on a cursor move that isn't typing, and after each Normal-mode command.
@@ -157,12 +163,11 @@ broken contract only our own bug can cause panics before anything changes.
 
 | Check | On failure |
 |---|---|
-| `ChangeSet::new`: a range reversed, out of order, past the end, or splitting a char | `Err(InvalidChange)`; spans can be stale, so the caller recomputes |
-| `apply`, `invert`, `compose`: a text or change set of another length | panic |
-| `ChangeSet::map`: a position past the end of the text | panic |
-| `Transaction::new`: a selection past the end of the changed text | panic |
-| `Document::apply`: a transaction made for a text of another length | panic, before the pending revision changes |
+| `Document::edit`, `edit_with`: a range reversed, out of order, past the end, or splitting a char | `Err(InvalidChange)`, before anything changes; spans can be stale, so the caller recomputes |
+| `Document::edit_with`: `selection` returns a selection past the end of the changed text | panic, before anything changes |
 | `Document::set_selection`: a selection past the end of the text | panic |
+| `ChangeSet::map`: a position past the end of the text | panic |
+| Internal: `apply`, `invert`, `compose` get a text or change set of another length | panic |
 | Internal: the primary range survives merging, `compose` ends both lists together, and redo never leads to the root | panic (`expect`, `unreachable!`) |
 | Internal: the mapper gets positions in order | `debug_assert!`; only `Selection::map` uses it, with sorted positions |
 
@@ -180,5 +185,5 @@ For documents, a property test runs random edits (with pauses around a second), 
 redos, and jumps by count and by time. After each, the text must be exactly the text of the
 revision the history is at, pending edits must start from it, and a jump by count must land
 where it should; at the end, the oldest and the newest revision must be reachable. Unit tests pin
-the rules: the pause boundary, commit points, edits that cancel out, restored selections, redo
-after a jump into another branch, and the limits of time jumps.
+the rules: the pause boundary, commit points, edits that cancel out, rejected edits, restored
+selections, redo after a jump into another branch, and the limits of time jumps.

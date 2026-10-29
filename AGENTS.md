@@ -6,7 +6,7 @@ same commit that changes the behavior.
 
 ## Implementation Guide
 
-As an agent when contributing to this project, keep contributions as atomic as possible unless asked and ALWAYS defer to the user regarding architectural decisions, finer implementation decisisions or even non-trivial abstraction designs.
+As an agent when contributing to this project, keep contributions as atomic as possible unless asked and ALWAYS defer to the user regarding architectural decisions, finer implementation decisisions or even non-trivial abstraction designs, though you may raise any concerns to the user if warranted.
 
 Code should always prioritise human readability and understandability. We want to minimise unnecessary layers of abstraction whenever possible. For non-trivial code changes, always prefer going through an atomic human code review process, where after completing a turn you should walk the user through your change to be reviewed.
 
@@ -124,9 +124,10 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
   that isn't typing, or a typing pause of 1 s or more starts a new revision; the pause is checked
   when the next edit arrives (no timer). History stays in memory and dies with its buffer.
 - **A `Document` owns text, selection, and history.** Every edit and history move goes through
-  it, so history can't drift from the text; the caller passes commit points. `earlier`/`later`
-  move through revisions in the order they were made, by count or duration. Redo follows the
-  branch made or visited last, as in Vim.
+  it, and it builds every change set from its own text (callers pass ranges and replacements), so
+  history can't drift from the text; the caller passes commit points. `earlier`/`later` move
+  through revisions in the order they were made, by count or duration. Redo follows the branch
+  made or visited last, as in Vim.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.

@@ -24,6 +24,10 @@ pub enum Assoc {
 
 /// An edit to a whole text: from start to end, which bytes to keep, delete, and insert.
 ///
+/// A [`Document`](crate::Document) builds one from its own text for each edit;
+/// [`Document::edit_with`](crate::Document::edit_with) hands it to the caller to map positions
+/// through.
+///
 /// A change set is kept in canonical form, so equal edits compare equal: no operation is empty,
 /// adjacent operations differ in kind, and at one position an insert comes before a delete.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,7 +37,8 @@ pub struct ChangeSet {
     len_after: usize,
 }
 
-/// Why [`ChangeSet::new`] rejected a change.
+/// Why [`Document::edit`](crate::Document::edit) or
+/// [`Document::edit_with`](crate::Document::edit_with) rejected an edit.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum InvalidChange {
     #[error("change {range:?} ends before it starts")]
@@ -59,7 +64,7 @@ impl ChangeSet {
     /// Returns [`InvalidChange`] for the first range that is reversed, starts before the previous
     /// one ends, runs past the end of `text`, or splits a char. Spans computed from an older
     /// snapshot of the text can do any of that, so the caller recomputes them.
-    pub fn new(
+    pub(crate) fn new(
         text: &Text,
         changes: impl IntoIterator<Item = (Range<usize>, String)>,
     ) -> Result<Self, InvalidChange> {
@@ -148,7 +153,7 @@ impl ChangeSet {
     /// # Panics
     ///
     /// Panics if `original` doesn't have the length this change set was made for.
-    pub fn invert(&self, original: &Text) -> Self {
+    pub(crate) fn invert(&self, original: &Text) -> Self {
         assert_eq!(
             original.len(),
             self.len_before,
@@ -178,7 +183,7 @@ impl ChangeSet {
     /// # Panics
     ///
     /// Panics if `next` was made for a text of another length than this change set produces.
-    pub fn compose(self, next: Self) -> Self {
+    pub(crate) fn compose(self, next: Self) -> Self {
         assert_eq!(
             self.len_after, next.len_before,
             "composed change sets don't line up",

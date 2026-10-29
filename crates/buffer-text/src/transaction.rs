@@ -1,8 +1,9 @@
 use crate::{ChangeSet, Selection, Text};
 
-/// An edit: a change set and the selection after it.
+/// An edit: a change set and the selection after it. A [`Document`](crate::Document) makes one
+/// for each edit, and its history keeps them to undo and redo.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Transaction {
+pub(crate) struct Transaction {
     changes: ChangeSet,
     selection: Selection,
 }
@@ -11,7 +12,7 @@ impl Transaction {
     /// # Panics
     ///
     /// Panics if a range of `selection` ends past the text `changes` produces.
-    pub fn new(changes: ChangeSet, selection: Selection) -> Self {
+    pub(crate) fn new(changes: ChangeSet, selection: Selection) -> Self {
         let len = changes.len_after();
         assert!(
             selection.ranges().iter().all(|range| range.end() <= len),
@@ -20,12 +21,8 @@ impl Transaction {
         Self { changes, selection }
     }
 
-    pub fn changes(&self) -> &ChangeSet {
+    pub(crate) fn changes(&self) -> &ChangeSet {
         &self.changes
-    }
-
-    pub fn selection(&self) -> &Selection {
-        &self.selection
     }
 
     /// Applies the change to `text` and sets `selection` to the one after it.
@@ -45,7 +42,7 @@ impl Transaction {
     ///
     /// Panics if `original` doesn't have the length the change set was made for, or if
     /// `selection_before` ends past it.
-    pub fn invert(&self, original: &Text, selection_before: Selection) -> Self {
+    pub(crate) fn invert(&self, original: &Text, selection_before: Selection) -> Self {
         Self::new(self.changes.invert(original), selection_before)
     }
 
@@ -55,7 +52,7 @@ impl Transaction {
     /// # Panics
     ///
     /// Panics if `next` was made for a text of another length than this transaction produces.
-    pub fn compose(self, next: Self) -> Self {
+    pub(crate) fn compose(self, next: Self) -> Self {
         Self {
             changes: self.changes.compose(next.changes),
             selection: next.selection,
