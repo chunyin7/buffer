@@ -4,11 +4,12 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0016](../decisions/0016-crop-rope.md) (crop rope),
 [0017](../decisions/0017-selection-based-core.md) (selection-based core),
 [0027](../decisions/0027-helix-selection-ranges.md) (Helix-style ranges),
+[0028](../decisions/0028-lines-are-breaks-plus-one.md) (lines),
 [0029](../decisions/0029-undo-insert-sessions.md) (undo steps), and
 [0031](../decisions/0031-document-owns-history.md) (documents and history).
 
-Status: text, change sets, selections, transactions, and documents with undo history exist.
-Lines, motions, text objects, and registers land later in M1.
+Status: text and lines, change sets, selections, transactions, and documents with undo history
+exist. Motions, text objects, and registers land later in M1.
 
 ## Text
 
@@ -23,6 +24,22 @@ Lines, motions, text objects, and registers land later in M1.
 - Positions are UTF-8 byte offsets from 0 to the text's length, inclusive. Conversion to chars,
   graphemes, or UTF-16 happens only at layout, IME, and platform boundaries.
 - An edit starts and ends on char boundaries; `Document::edit` rejects one that doesn't.
+
+## Lines
+
+A text has one more line than it has line breaks
+([0028](../decisions/0028-lines-are-breaks-plus-one.md)). `\n` and `\r\n` are line breaks; a lone
+`\r` is not.
+
+- Lines count from 0. Every offset from 0 to the length is on exactly one line: `"foo\n"` has two
+  lines, the second one empty, and an empty text has one. A line break, and an offset inside a
+  `\r\n`, belong to the line the break ends.
+- `line_count()` counts the lines; `line_of(offset)` is the line an offset is on.
+- `line_start(line)` is where a line starts, and `line_end(line)` where its content ends, before
+  its line break. `line_start(line_count())` is the end of the text, so lines `a..b`, with their
+  breaks, cover `line_start(a)..line_start(b)` without an end-of-text special case.
+- crop's `line_len` leaves out the empty line after a final break, so `Text` counts the breaks
+  before the end of the text instead. Every method is a few rope lookups, O(log n).
 
 ## Change sets
 
@@ -167,6 +184,8 @@ broken contract only our own bug can cause panics before anything changes.
 | `Document::edit_with`: `selection` returns a selection past the end of the changed text | panic, before anything changes |
 | `Document::set_selection`: a selection past the end of the text | panic |
 | `ChangeSet::map`: a position past the end of the text | panic |
+| `Text::line_of`: an offset past the end of the text or inside a char | panic |
+| `Text::line_start`: a line past `line_count()`; `line_end`: `line_count()` or more | panic |
 | Internal: `apply`, `invert`, `compose` get a text or change set of another length | panic |
 | Internal: the primary range survives merging, `compose` ends both lists together, and redo never leads to the root | panic (`expect`, `unreachable!`) |
 | Internal: the mapper gets positions in order | `debug_assert!`; only `Selection::map` uses it, with sorted positions |
@@ -179,7 +198,8 @@ mapping keeps untouched chars in place and is monotonic, and every result is can
 Generated texts mix multi-byte chars, combining marks, emoji sequences, and line breaks, and some
 span several rope chunks. For selections, they check that merging covers exactly the given
 ranges, that mapping in one pass equals mapping each range alone, and that ranges no change
-touches keep their text.
+touches keep their text. For lines, they split the text at each `\n` and check the line count,
+each line's start and end, and the line of every char boundary against the pieces.
 
 For documents, a property test runs random edits (with pauses around a second), commits, undos,
 redos, and jumps by count and by time. After each, the text must be exactly the text of the
