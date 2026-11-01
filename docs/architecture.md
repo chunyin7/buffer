@@ -5,8 +5,9 @@ decisions behind each part are in [decisions/](decisions/README.md); this doc sh
 connect.
 
 Status: the workspace and crate layout exist. `buffer-app` opens an empty window, and
-`buffer-text` has text and lines, change sets, selections, transactions, and documents with undo
-history ([editor/model.md](editor/model.md)). Everything else here is the target design.
+`buffer-text` has text with lines and grapheme boundaries, change sets, selections, transactions,
+and documents with undo history ([editor/model.md](editor/model.md)). Everything else here is the
+target design.
 
 ## Crates
 

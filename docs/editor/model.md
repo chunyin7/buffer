@@ -8,8 +8,8 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0029](../decisions/0029-undo-insert-sessions.md) (undo steps), and
 [0031](../decisions/0031-document-owns-history.md) (documents and history).
 
-Status: text and lines, change sets, selections, transactions, and documents with undo history
-exist. Motions, text objects, and registers land later in M1.
+Status: text with lines and grapheme boundaries, change sets, selections, transactions, and
+documents with undo history exist. Motions, text objects, and registers land later in M1.
 
 ## Text
 
@@ -40,6 +40,26 @@ A text has one more line than it has line breaks
   breaks, cover `line_start(a)..line_start(b)` without an end-of-text special case.
 - crop's `line_len` leaves out the empty line after a final break, so `Text` counts the breaks
   before the end of the text instead. Every method is a few rope lookups, O(log n).
+
+## Graphemes
+
+A cursor moves by graphemes: what a reader sees as one character, Unicode's extended grapheme
+clusters (UAX #29). An `e` with a combining accent, a flag, an emoji sequence, and a `\r\n` are one
+grapheme each, so a cursor never stops inside them.
+
+- `is_grapheme_boundary(offset)` says whether a cursor may stop at an offset; an offset inside a
+  char is no boundary.
+- `next_grapheme_boundary(offset)` is the first boundary after an offset, and
+  `prev_grapheme_boundary(offset)` the last one before it. They stay put at the end and the start
+  of the text, and from inside a grapheme they go to its end and its start.
+- unicode-segmentation's `GraphemeCursor` finds them; egui links that crate already. `Text`
+  slices the rope at the offset and hands the cursor the chunks from there on, forward or
+  backward, plus the chunks before them when a rule looks back across a chunk's start, as
+  regional indicators do to pair into flags.
+- Each call costs a few rope lookups, O(log n), plus the chars the rules read around the offset:
+  the grapheme it crosses and, inside a run of regional indicators, the run before it.
+- crop's `graphemes` feature stays off: its `is_grapheme_boundary` walks chunks back from the end
+  of the text, so its cost grows with the distance to the end.
 
 ## Change sets
 
@@ -94,7 +114,7 @@ Mapping is monotonic: for one `assoc`, a later position never maps before an ear
   primary if either was. Taking the primary range itself means a selection can't be empty or have
   a primary index past its ranges.
 - Ranges sit in a `SmallVec` with room for one, so a single-range selection doesn't allocate.
-- The block cursor, and the one-grapheme minimum in Normal mode, need grapheme boundaries; they
+- The block cursor and the one-grapheme minimum in Normal mode build on grapheme boundaries; they
   land with the motions.
 
 ### Mapping selections
@@ -184,7 +204,8 @@ broken contract only our own bug can cause panics before anything changes.
 | `Document::edit_with`: `selection` returns a selection past the end of the changed text | panic, before anything changes |
 | `Document::set_selection`: a selection past the end of the text | panic |
 | `ChangeSet::map`: a position past the end of the text | panic |
-| `Text::line_of`: an offset past the end of the text or inside a char | panic |
+| `Text::is_char_boundary`, `is_grapheme_boundary`: an offset past the end of the text | panic |
+| `Text::line_of`, `next_grapheme_boundary`, `prev_grapheme_boundary`: an offset past the end of the text or inside a char | panic |
 | `Text::line_start`: a line past `line_count()`; `line_end`: `line_count()` or more | panic |
 | Internal: `apply`, `invert`, `compose` get a text or change set of another length | panic |
 | Internal: the primary range survives merging, `compose` ends both lists together, and redo never leads to the root | panic (`expect`, `unreachable!`) |
@@ -199,7 +220,10 @@ Generated texts mix multi-byte chars, combining marks, emoji sequences, and line
 span several rope chunks. For selections, they check that merging covers exactly the given
 ranges, that mapping in one pass equals mapping each range alone, and that ranges no change
 touches keep their text. For lines, they split the text at each `\n` and check the line count,
-each line's start and end, and the line of every char boundary against the pieces.
+each line's start and end, and the line of every char boundary against the pieces. For graphemes,
+they compare each method with unicode-segmentation run over the whole string: at every char
+boundary of a short text, and near each chunk edge of a long one, including runs of regional
+indicators, combining accents, and joined emoji long enough to cross chunks.
 
 For documents, a property test runs random edits (with pauses around a second), commits, undos,
 redos, and jumps by count and by time. After each, the text must be exactly the text of the
