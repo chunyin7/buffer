@@ -128,6 +128,19 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
   history can't drift from the text; the caller passes commit points. `earlier`/`later` move
   through revisions in the order they were made, by count or duration. Redo follows the branch
   made or visited last, as in Vim.
+- **Motions return targets.** Pure functions in `buffer-text`: from an offset and a count, a
+  motion returns its target (word motions also where the span they cross starts), and three range
+  builders apply it: move, select, extend. A count that overshoots stops at the last target. Vim's
+  motion kinds (exclusive, inclusive, linewise) live in the Vim preset. Grapheme motions take a
+  flag to stop at line edges (Vim) or cross them (Helix).
+  - Normal mode keeps ranges at least one grapheme wide, except an empty range at an end of the
+    text that starts an empty line; a range end that an edit leaves inside a grapheme moves
+    outward. `buffer-modal` restores this after every Normal-mode command and edit.
+  - Words follow Unicode's word boundaries (UAX #29), with adjacent punctuation merged into one
+    stop, behind an interface another segmenter can implement.
+  - `j`/`k` in `buffer-text` move across lines split by line breaks, with a goal column in
+    graphemes (revisit: display cells) that the caller keeps. Moving across soft-wrapped lines
+    needs the layout and lands with the edit view.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.
