@@ -4,10 +4,10 @@ How buffer fits together: crates, dependency rules, threads, the frame loop, and
 decisions behind each part are in [decisions/](decisions/README.md); this doc shows how they
 connect.
 
-Status: the workspace and crate layout exist. `buffer-app` opens an empty window, and
+Status: the workspace and crate layout exist. `buffer-app` opens an empty window,
 `buffer-text` has text with lines and grapheme boundaries, change sets, selections, transactions,
-and documents with undo history ([editor/model.md](editor/model.md)). Everything else here is the
-target design.
+and documents with undo history ([editor/model.md](editor/model.md)), and `buffer-modal` has keys
+and keymaps ([editor/keymaps.md](editor/keymaps.md)). Everything else here is the target design.
 
 ## Crates
 

@@ -14,11 +14,12 @@ Code should always prioritise human readability and understandability. We want t
 
 - Pre-alpha: licenses, the workspace with the target crate layout, lints, cargo-deny, CI, and the
   README, CONTRIBUTING, architecture doc, and ADRs are in place. `buffer-app` opens an empty
-  window, and `buffer-text` has text with lines and grapheme boundaries, change sets, selections,
-  transactions, and documents with undo history ([docs/editor/model.md](docs/editor/model.md)).
+  window, `buffer-text` has text with lines and grapheme boundaries, change sets, selections,
+  transactions, and documents with undo history ([docs/editor/model.md](docs/editor/model.md)),
+  and `buffer-modal` has keys and keymaps ([docs/editor/keymaps.md](docs/editor/keymaps.md)).
   Everything else below is decided, not implemented, unless marked otherwise.
-- Current milestone: **M0 Foundations**; **M1 Editing** has started in `buffer-text`. Milestones
-  and planned docs: [docs/ROADMAP.md](docs/ROADMAP.md).
+- Current milestone: **M0 Foundations**; **M1 Editing** has started in `buffer-text` and
+  `buffer-modal`. Milestones and planned docs: [docs/ROADMAP.md](docs/ROADMAP.md).
 - M0 still to do: baselines with docs/performance.md, the typst spike, and a first green CI run
   on all three OSes.
 
@@ -144,6 +145,9 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.
+  - A key sequence is bound to a command or starts longer ones, never both, so dispatch never
+    waits on a timer (no Vim `timeoutlen`). A later binding replaces what its keys overlap; that
+    is how config overrides presets.
   - Key dispatch runs before egui widgets see input (`App::raw_input_hook` / start of `logic`).
     egui's Tab focus traversal and default clipboard shortcuts are disabled where they collide.
   - Character bindings use logical (layout-aware) keys. Insert mode supports IME.
