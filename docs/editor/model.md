@@ -5,11 +5,13 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0017](../decisions/0017-selection-based-core.md) (selection-based core),
 [0027](../decisions/0027-helix-selection-ranges.md) (Helix-style ranges),
 [0028](../decisions/0028-lines-are-breaks-plus-one.md) (lines),
-[0029](../decisions/0029-undo-insert-sessions.md) (undo steps), and
-[0031](../decisions/0031-document-owns-history.md) (documents and history).
+[0029](../decisions/0029-undo-insert-sessions.md) (undo steps),
+[0031](../decisions/0031-document-owns-history.md) (documents and history), and
+[0032](../decisions/0032-motions-return-targets.md) (motions and Normal-mode ranges).
 
-Status: text with lines and grapheme boundaries, change sets, selections, transactions, and
-documents with undo history exist. Motions, text objects, and registers land later in M1.
+Status: text with lines and grapheme boundaries, change sets, selections with block cursors,
+transactions, and documents with undo history exist. Motions, text objects, and registers land
+later in M1.
 
 ## Text
 
@@ -114,8 +116,6 @@ Mapping is monotonic: for one `assoc`, a later position never maps before an ear
   primary if either was. Taking the primary range itself means a selection can't be empty or have
   a primary index past its ranges.
 - Ranges sit in a `SmallVec` with room for one, so a single-range selection doesn't allocate.
-- The block cursor and the one-grapheme minimum in Normal mode build on grapheme boundaries; they
-  land with the motions.
 
 ### Mapping selections
 
@@ -129,10 +129,38 @@ Mapping is monotonic: for one `assoc`, a later position never maps before an ear
   new text, keeping its direction.
 - At an edge of replaced bytes, both ends land on one point: a range from their start to inside
   them collapses to the start of the new text, and one from inside them to their end collapses to
-  the end of the new text. Deleting a range's text collapses it too, so a caller that needs
-  non-empty ranges (Normal mode) widens them after mapping.
+  the end of the new text. Deleting a range's text collapses it too; Normal mode widens such
+  ranges again (see below).
 - Sorted, non-overlapping ranges give positions in order, so the mapping is one pass over the
   change set and the ranges together.
+
+### Block cursors and Normal mode
+
+In Normal mode a range shows a block cursor on a grapheme, and every range covers at least one
+grapheme ([0032](../decisions/0032-motions-return-targets.md)).
+
+- `cursor(text)` is where the block cursor starts: the grapheme at the head, or the one before
+  the head when the range points forward. For an empty range, such as an Insert-mode caret, it
+  is the head.
+- Motions will return targets. A move to a target is `Range::point(target)`, which Normal mode
+  widens to one grapheme; selecting the span a motion crossed is `Range::new(start, target)`; and
+  `extend_to(text, target)` extends a range.
+- `extend_to` works as Vim's Visual mode and Helix's Select mode do. The range then covers the
+  anchor's grapheme, the target's, and those between, with the block cursor on the target's. The
+  anchor's grapheme is the one after the anchor, or the one before it when the range points
+  backward. The range points backward when the target comes before that grapheme, so when the
+  head crosses it, the anchor moves to its other edge. Extending to the end of the text covers
+  the rest of it, with the block cursor on the last grapheme.
+- `Selection::for_normal_mode(text)` restores Normal mode's rules. `buffer-modal` applies it
+  after every Normal-mode command and edit; `Document` knows no modes.
+  - A range end inside a grapheme moves outward to the grapheme's edge. An edit can leave one
+    there: another cursor adds a combining accent right after a range, say.
+  - An empty range covers the grapheme it is in, or the one that starts at it.
+  - At the end of the text, an empty range stays where an empty line starts, in an empty text or
+    after a final line break, and covers the last grapheme otherwise. The Vim preset keeps its
+    cursor off that empty last line itself.
+  - Ranges that now overlap merge, as in `Selection::new`.
+- Each range costs a few grapheme lookups, O(log n) each.
 
 ## Transactions
 
@@ -207,6 +235,7 @@ broken contract only our own bug can cause panics before anything changes.
 | `Text::is_char_boundary`, `is_grapheme_boundary`: an offset past the end of the text | panic |
 | `Text::line_of`, `next_grapheme_boundary`, `prev_grapheme_boundary`: an offset past the end of the text or inside a char | panic |
 | `Text::line_start`: a line past `line_count()`; `line_end`: `line_count()` or more | panic |
+| `Range::cursor` (the head), `extend_to` (the anchor and the target), `Selection::for_normal_mode` (every range end): an offset past the end of the text or inside a char | panic |
 | Internal: `apply`, `invert`, `compose` get a text or change set of another length | panic |
 | Internal: the primary range survives merging, `compose` ends both lists together, and redo never leads to the root | panic (`expect`, `unreachable!`) |
 | Internal: the mapper gets positions in order | `debug_assert!`; only `Selection::map` uses it, with sorted positions |
@@ -224,6 +253,13 @@ each line's start and end, and the line of every char boundary against the piece
 they compare each method with unicode-segmentation run over the whole string: at every char
 boundary of a short text, and near each chunk edge of a long one, including runs of regional
 indicators, combining accents, and joined emoji long enough to cross chunks.
+
+For Normal mode, they work out what each range becomes on the grapheme boundaries of the whole
+string, merge the results, and compare them with `for_normal_mode`, for the generated ranges and
+for an empty range at the end of each text; every range must end on grapheme boundaries and be
+empty only where the rules allow. `extend_to` must cover exactly the anchor's grapheme, the
+target's, and those between, point backward only toward a target before the anchor's grapheme,
+and put the block cursor on the target.
 
 For documents, a property test runs random edits (with pauses around a second), commits, undos,
 redos, and jumps by count and by time. After each, the text must be exactly the text of the

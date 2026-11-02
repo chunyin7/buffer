@@ -5,6 +5,7 @@ use std::ops;
 use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::sample::select;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::Range;
 
@@ -51,6 +52,15 @@ pub fn char_boundaries(text: &str) -> Vec<usize> {
         .collect()
 }
 
+/// The grapheme boundaries of `text`, including its end, as unicode-segmentation finds them in
+/// the whole string.
+pub fn grapheme_boundaries(text: &str) -> Vec<usize> {
+    text.grapheme_indices(true)
+        .map(|(offset, _)| offset)
+        .chain([text.len()])
+        .collect()
+}
+
 /// Up to five changes to `text`: sorted, non-overlapping, and on char boundaries.
 pub fn changes(text: &str) -> impl Strategy<Value = Vec<Change>> + use<> {
     let boundaries = char_boundaries(text);
@@ -88,6 +98,14 @@ pub fn ranges(text: &str) -> impl Strategy<Value = (Range, Vec<Range>)> + use<> 
     let range = (select(boundaries.clone()), select(boundaries))
         .prop_map(|(anchor, head)| Range::new(anchor, head));
     (range.clone(), vec(range, 0..5))
+}
+
+/// A text, and a primary range and others in it.
+pub fn text_and_ranges() -> impl Strategy<Value = (String, (Range, Vec<Range>))> {
+    text().prop_flat_map(|text| {
+        let ranges = ranges(&text);
+        (Just(text), ranges)
+    })
 }
 
 /// A text, changes to it, and a primary range and others in it.
