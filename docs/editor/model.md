@@ -6,12 +6,13 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0027](../decisions/0027-helix-selection-ranges.md) (Helix-style ranges),
 [0028](../decisions/0028-lines-are-breaks-plus-one.md) (lines),
 [0029](../decisions/0029-undo-insert-sessions.md) (undo steps),
-[0031](../decisions/0031-document-owns-history.md) (documents and history), and
-[0032](../decisions/0032-motions-return-targets.md) (motions and Normal-mode ranges).
+[0031](../decisions/0031-document-owns-history.md) (documents and history),
+[0032](../decisions/0032-motions-return-targets.md) (motions and Normal-mode ranges), and
+[0034](../decisions/0034-word-motions-stop-at-line-edges.md) (word motions at line edges).
 
-Status: text with lines and grapheme boundaries, grapheme and line motions, change sets,
-selections with block cursors, transactions, and documents with undo history exist. Word motions,
-text objects, and registers land later in M1.
+Status: text with lines and grapheme boundaries, grapheme, line, and word motions, change sets,
+selections with block cursors, transactions, and documents with undo history exist. Text objects
+and registers land later in M1.
 
 ## Text
 
@@ -86,6 +87,10 @@ preset.
 | `first_non_blank(line)` | the line's first grapheme that isn't blank | `^` | `gs` |
 | `line_end(line)` | the end of the line's content | `$` | `gl` |
 | `line_down(offset, count, goal)`, `line_up(…)` | the grapheme at the goal column, `count` lines down or up | `j`, `k` | `j`, `k` |
+| `next_word_start(offset, count, words)` | `count` word starts forward | `w` | `w` |
+| `next_word_end(…)` | `count` word ends forward | `e` | `e` |
+| `prev_word_start(…)` | `count` word starts back | `b` | `b` |
+| `prev_word_end(…)` | `count` word ends back | `ge` | |
 
 - `LineEdges::Stop` keeps a grapheme motion on its line, between the line's start and the end of
   its content, as Vim's `h` and `l` do. With `LineEdges::Cross` it stops only at the ends of the
@@ -105,6 +110,44 @@ preset.
   build, against 120 to 185 ns for stepping with `next_grapheme_boundary`, so 0.18 ms against
   1.35 ms on a 10 KB line. A vertical move costs O(length) of the lines it reads.
 - Moving across soft-wrapped lines lands with the edit view.
+
+### Word motions
+
+Word motions take a segmenter, an `impl Words` or a `dyn Words`. It splits a line's content into
+segments, each a `WordKind::Word`, `Punctuation`, or `Whitespace`, and a motion stops where a
+segment that isn't blank starts or ends ([0032](../decisions/0032-motions-return-targets.md)).
+Another segmenter, such as Vim's char classes or a dictionary for CJK, changes the stops without
+changing the motions.
+
+- `UnicodeWords` follows Unicode's word boundaries (UAX #29), with adjacent punctuation merged, so
+  `**`, `[[`, `...`, and `->` are one stop each; adjacent whitespace merges too. A segment with a
+  letter or digit is a word: `don't`, `3.14`, `example.com`, `foo_bar`. Ideographs and hiragana
+  are a word per char, and a run of katakana is one word. UAX #29 can break inside a grapheme,
+  after a prepended char such as U+0600; the segment there stays whole, so a motion never stops
+  inside a grapheme.
+- `BigWords` splits only at blank graphemes: WORDs, for `W`, `B`, and `E`.
+- A word span never crosses a line break, as in Helix
+  ([0034](../decisions/0034-word-motions-stop-at-line-edges.md)). A step stops at the next stop of
+  its kind on the line, or at the line's edge: its end going forward, its start going backward. A
+  step that starts at a line's edge first skips the line break and any empty lines, so empty lines
+  are never stops.
+- A motion returns `(from, target)`. The target is the count-th stop strictly after, or before,
+  `offset`. `from` is where the last step's span starts if the step started at a stop or at a
+  line's edge. `None` means it started inside a segment, so the span starts at the cursor.
+
+| Key | Vim passes | Helix passes | Helix selects from |
+|---|---|---|---|
+| `w` | the cursor's start | the cursor's end | `from`, or the cursor's start |
+| `e` | the cursor's end | the cursor's end | `from`, or the cursor's start |
+| `b` | the cursor's start | the cursor's start | `from`, or the cursor's end |
+| `ge` | the cursor's end | | |
+
+- On the space in `foo bar`, Vim's `w` passes 3 and lands on `b`. Helix's passes 4, a stop, and
+  selects `bar`. The Vim preset adapts where Vim's motions cross lines: it steps again at line
+  edges, and it doesn't stop on empty lines.
+- Each step copies its line out of the rope and segments it, about 19 ns per byte in a release
+  build: a `w` in the middle of a 10 KB line takes 0.26 ms. Steps on the same line reuse the
+  segments.
 
 ## Change sets
 
@@ -277,7 +320,7 @@ broken contract only our own bug can cause panics before anything changes.
 | `ChangeSet::map`: a position past the end of the text | panic |
 | `Text::is_char_boundary`, `is_grapheme_boundary`: an offset past the end of the text | panic |
 | `Text::line_of`, `next_grapheme_boundary`, `prev_grapheme_boundary`: an offset past the end of the text or inside a char | panic |
-| `Text::next_grapheme`, `prev_grapheme`, `line_down`, `line_up`: an offset past the end of the text or inside a char | panic |
+| `Text::next_grapheme`, `prev_grapheme`, `line_down`, `line_up`, and the word motions: an offset past the end of the text or inside a char | panic |
 | `Text::line_start`: a line past `line_count()`; `line_end`, `first_non_blank`: `line_count()` or more | panic |
 | `Range::cursor` (the head), `extend_to` (the anchor and the target), `Selection::for_normal_mode` (every range end): an offset past the end of the text or inside a char | panic |
 | Internal: `apply`, `invert`, `compose` get a text or change set of another length | panic |
@@ -304,6 +347,12 @@ For motions, they step through the string's grapheme boundaries, stopping at the
 Unicode spaces, combining accents, and line breaks. And they work out each vertical move from the
 string's lines, also checking that a move down and back up with the goal kept returns to the start
 when the line it moved to is long enough.
+
+For words, they check that `UnicodeWords` keeps to UAX #29 boundaries on grapheme boundaries,
+classifies each segment by its chars, and leaves only words next to their own kind, and that
+`BigWords` alternates blank and non-blank runs. Unit tests pin the segments of Markdown lines.
+Word motions are compared with a model built from the string's lines and their segments, for both
+segmenters and all four motions, and unit tests pin Helix's selections, at line ends too.
 
 For Normal mode, they work out what each range becomes on the grapheme boundaries of the whole
 string, merge the results, and compare them with `for_normal_mode`, for the generated ranges and

@@ -10,8 +10,10 @@ mod selection;
 mod strategies;
 mod text;
 mod transaction;
+mod words;
 
 pub use change::{Assoc, ChangeSet, InvalidChange};
 pub use document::Document;
 pub use selection::{Range, Selection};
 pub use text::{LineEdges, Text};
+pub use words::{BigWords, UnicodeWords, WordKind, Words};

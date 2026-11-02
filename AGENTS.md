@@ -14,9 +14,9 @@ Code should always prioritise human readability and understandability. We want t
 
 - Pre-alpha: licenses, the workspace with the target crate layout, lints, cargo-deny, CI, and the
   README, CONTRIBUTING, architecture doc, and ADRs are in place. `buffer-app` opens an empty
-  window, `buffer-text` has text with lines and grapheme boundaries, grapheme and line motions,
-  change sets, selections with block cursors, transactions, and documents with undo history
-  ([docs/editor/model.md](docs/editor/model.md)), and `buffer-modal` has keys and keymaps
+  window, `buffer-text` has text with lines and grapheme boundaries, grapheme, line, and word
+  motions, change sets, selections with block cursors, transactions, and documents with undo
+  history ([docs/editor/model.md](docs/editor/model.md)), and `buffer-modal` has keys and keymaps
   ([docs/editor/keymaps.md](docs/editor/keymaps.md)). Everything else below is decided, not
   implemented, unless marked otherwise.
 - Current milestone: **M0 Foundations**; **M1 Editing** has started in `buffer-text` and
