@@ -140,6 +140,9 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
     outward. `buffer-modal` restores this after every Normal-mode command and edit.
   - Words follow Unicode's word boundaries (UAX #29), with adjacent punctuation merged into one
     stop, behind an interface another segmenter can implement.
+  - Word motions stop at line edges, as Helix's do: a step ends at a line's edge at the latest,
+    and one that starts there skips the break and any empty lines, so a word span never holds a
+    line break. The Vim preset steps again where Vim's motions cross lines.
   - `j`/`k` in `buffer-text` move across lines split by line breaks, with a goal column in
     graphemes (revisit: display cells) that the caller keeps. Moving across soft-wrapped lines
     needs the layout and lands with the edit view.
