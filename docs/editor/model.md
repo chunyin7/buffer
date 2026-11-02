@@ -58,6 +58,11 @@ grapheme each, so a cursor never stops inside them.
   slices the rope at the offset and hands the cursor the chunks from there on, forward or
   backward, plus the chunks before them when a rule looks back across a chunk's start, as
   regional indicators do to pair into flags.
+- Going forward, a cursor never gets a second chunk. In unicode-segmentation 1.13.3, a cursor
+  that does can count a regional indicator twice and split a flag that follows a prepended char,
+  such as U+0600 ARABIC NUMBER SIGN. So at a chunk's end a fresh cursor decides whether the end is
+  a boundary, and if it isn't, a new cursor goes on in the next chunk. Going backward, a cursor
+  decides a chunk's start while it still holds the chunk before it, so the bug doesn't reach it.
 - Each call costs a few rope lookups, O(log n), plus the chars the rules read around the offset:
   the grapheme it crosses and, inside a run of regional indicators, the run before it.
 - crop's `graphemes` feature stays off: its `is_grapheme_boundary` walks chunks back from the end
@@ -252,7 +257,8 @@ touches keep their text. For lines, they split the text at each `\n` and check t
 each line's start and end, and the line of every char boundary against the pieces. For graphemes,
 they compare each method with unicode-segmentation run over the whole string: at every char
 boundary of a short text, and near each chunk edge of a long one, including runs of regional
-indicators, combining accents, and joined emoji long enough to cross chunks.
+indicators, combining accents, joined emoji, and flags after prepended chars, long enough to
+cross chunks.
 
 For Normal mode, they work out what each range becomes on the grapheme boundaries of the whole
 string, merge the results, and compare them with `for_normal_mode`, for the generated ranges and

@@ -150,8 +150,15 @@ impl Text {
             match cursor.next_boundary(chunk, chunk_start) {
                 Ok(boundary) => return boundary.unwrap_or(len),
                 Err(GraphemeIncomplete::NextChunk) => {
+                    // The cursor needs the next chunk to decide this chunk's end. One that gets a
+                    // second chunk can count a regional indicator twice (unicode-segmentation
+                    // 1.13.3) and split a flag, so a fresh cursor decides, and a new one goes on.
                     chunk_start += chunk.len();
+                    if self.is_grapheme_boundary(chunk_start) {
+                        return chunk_start;
+                    }
                     chunk = chunks.next().expect("the text goes on after this chunk");
+                    cursor = GraphemeCursor::new(chunk_start, len, true);
                 }
                 Err(GraphemeIncomplete::PreContext(end)) => self.provide_context(&mut cursor, end),
                 Err(error) => unreachable!("grapheme cursor going forward: {error:?}"),
@@ -330,10 +337,11 @@ mod tests {
     /// A text around a run of a char that joins the one before it: a regional indicator, which
     /// pairs into flags, a combining accent, or an emoji after a zero-width joiner. A rope chunk
     /// holds 2 KiB at most, so a run of 2 to 6 KiB spans chunks, and so does a grapheme in it, or
-    /// the chars that decide where it ends.
+    /// the chars that decide where it ends. A run of flags, each after a prepended char (U+0600
+    /// ARABIC NUMBER SIGN), puts chunk edges inside graphemes that start with another char.
     fn runs() -> impl Strategy<Value = String> {
         let run = (
-            select(&["\u{1f1e9}", "\u{301}", "\u{200d}🐻"][..]),
+            select(&["\u{1f1e9}", "\u{301}", "\u{200d}🐻", "\u{600}🇩🇪"][..]),
             2048..6144_usize,
         )
             .prop_map(|(piece, bytes)| piece.repeat(bytes / piece.len()));
