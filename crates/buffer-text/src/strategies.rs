@@ -92,6 +92,14 @@ pub fn text_and_two_changes() -> impl Strategy<Value = (String, Vec<Change>, Vec
     })
 }
 
+/// A text and a grapheme boundary in it, where a cursor may stand.
+pub fn text_and_grapheme_boundary() -> impl Strategy<Value = (String, usize)> {
+    text().prop_flat_map(|text| {
+        let offset = select(grapheme_boundaries(&text));
+        (Just(text), offset)
+    })
+}
+
 /// A primary range and up to four others, on char boundaries of `text`, pointing either way.
 pub fn ranges(text: &str) -> impl Strategy<Value = (Range, Vec<Range>)> + use<> {
     let boundaries = char_boundaries(text);

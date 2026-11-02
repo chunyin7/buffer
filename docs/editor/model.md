@@ -9,9 +9,9 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0031](../decisions/0031-document-owns-history.md) (documents and history), and
 [0032](../decisions/0032-motions-return-targets.md) (motions and Normal-mode ranges).
 
-Status: text with lines and grapheme boundaries, change sets, selections with block cursors,
-transactions, and documents with undo history exist. Motions, text objects, and registers land
-later in M1.
+Status: text with lines and grapheme boundaries, grapheme and line motions, change sets,
+selections with block cursors, transactions, and documents with undo history exist. Word motions,
+text objects, and registers land later in M1.
 
 ## Text
 
@@ -67,6 +67,44 @@ grapheme each, so a cursor never stops inside them.
   the grapheme it crosses and, inside a run of regional indicators, the run before it.
 - crop's `graphemes` feature stays off: its `is_grapheme_boundary` walks chunks back from the end
   of the text, so its cost grows with the distance to the end.
+
+## Motions
+
+Motions are `Text` methods ([0032](../decisions/0032-motions-return-targets.md)). From an offset
+and a count, each returns a target offset on a grapheme boundary, and the range builders in
+[Block cursors and Normal mode](#block-cursors-and-normal-mode) turn it into a range. A count that
+overshoots stops at the last target, and a motion that can't move returns its offset, so the
+caller can tell. Targets are boundaries: `line_end` is where the line break starts, and the
+presets put the block cursor for `$` on the grapheme before it. Vim's motion kinds live in the Vim
+preset.
+
+| Method | Target | Vim | Helix |
+|---|---|---|---|
+| `next_grapheme(offset, count, edges)` | `count` graphemes forward | `l` | `l` |
+| `prev_grapheme(offset, count, edges)` | `count` graphemes back | `h` | `h` |
+| `line_start(line)` | the start of the line | `0` | `gh` |
+| `first_non_blank(line)` | the line's first grapheme that isn't blank | `^` | `gs` |
+| `line_end(line)` | the end of the line's content | `$` | `gl` |
+| `line_down(offset, count, goal)`, `line_up(…)` | the grapheme at the goal column, `count` lines down or up | `j`, `k` | `j`, `k` |
+
+- `LineEdges::Stop` keeps a grapheme motion on its line, between the line's start and the end of
+  its content, as Vim's `h` and `l` do. With `LineEdges::Cross` it stops only at the ends of the
+  text, and a line break is one grapheme, as in Helix.
+- `first_non_blank` skips graphemes of Unicode whitespace: spaces, tabs, no-break spaces, and the
+  ideographic space U+3000 that indents Japanese paragraphs. A grapheme with any other char, such
+  as a space with a combining accent, isn't blank. A line that is all blank gives the end of its
+  content.
+- The start and the end of the text are 0 and `len()`. Line `n` starts at `line_start(n)`, and
+  Vim's `G` goes to `first_non_blank(n)`.
+- `line_down` and `line_up` keep to a goal column, counted in graphemes from the line's start
+  (revisit: display cells, with the edit view). The caller passes the goal it kept, or `None` to
+  start from `offset`'s column, and keeps the goal that comes back. A line shorter than the goal
+  gives the end of its content, and the goal `usize::MAX` keeps to line ends, as Vim does after
+  `$`. A count past the first or the last line stops there.
+- Columns copy the line out of the rope and segment the copy: 17 ns per grapheme in a release
+  build, against 120 to 185 ns for stepping with `next_grapheme_boundary`, so 0.18 ms against
+  1.35 ms on a 10 KB line. A vertical move costs O(length) of the lines it reads.
+- Moving across soft-wrapped lines lands with the edit view.
 
 ## Change sets
 
@@ -147,9 +185,9 @@ grapheme ([0032](../decisions/0032-motions-return-targets.md)).
 - `cursor(text)` is where the block cursor starts: the grapheme at the head, or the one before
   the head when the range points forward. For an empty range, such as an Insert-mode caret, it
   is the head.
-- Motions will return targets. A move to a target is `Range::point(target)`, which Normal mode
-  widens to one grapheme; selecting the span a motion crossed is `Range::new(start, target)`; and
-  `extend_to(text, target)` extends a range.
+- Motions return [targets](#motions). A move to a target is `Range::point(target)`, which Normal
+  mode widens to one grapheme; selecting the span a motion crossed is `Range::new(start, target)`;
+  and `extend_to(text, target)` extends a range.
 - `extend_to` works as Vim's Visual mode and Helix's Select mode do. The range then covers the
   anchor's grapheme, the target's, and those between, with the block cursor on the target's. The
   anchor's grapheme is the one after the anchor, or the one before it when the range points
@@ -239,7 +277,8 @@ broken contract only our own bug can cause panics before anything changes.
 | `ChangeSet::map`: a position past the end of the text | panic |
 | `Text::is_char_boundary`, `is_grapheme_boundary`: an offset past the end of the text | panic |
 | `Text::line_of`, `next_grapheme_boundary`, `prev_grapheme_boundary`: an offset past the end of the text or inside a char | panic |
-| `Text::line_start`: a line past `line_count()`; `line_end`: `line_count()` or more | panic |
+| `Text::next_grapheme`, `prev_grapheme`, `line_down`, `line_up`: an offset past the end of the text or inside a char | panic |
+| `Text::line_start`: a line past `line_count()`; `line_end`, `first_non_blank`: `line_count()` or more | panic |
 | `Range::cursor` (the head), `extend_to` (the anchor and the target), `Selection::for_normal_mode` (every range end): an offset past the end of the text or inside a char | panic |
 | Internal: `apply`, `invert`, `compose` get a text or change set of another length | panic |
 | Internal: the primary range survives merging, `compose` ends both lists together, and redo never leads to the root | panic (`expect`, `unreachable!`) |
@@ -259,6 +298,12 @@ they compare each method with unicode-segmentation run over the whole string: at
 boundary of a short text, and near each chunk edge of a long one, including runs of regional
 indicators, combining accents, joined emoji, and flags after prepended chars, long enough to
 cross chunks.
+
+For motions, they step through the string's grapheme boundaries, stopping at the line's edges for
+`LineEdges::Stop`. They find each line's first grapheme that isn't all whitespace, in texts of
+Unicode spaces, combining accents, and line breaks. And they work out each vertical move from the
+string's lines, also checking that a move down and back up with the goal kept returns to the start
+when the line it moved to is long enough.
 
 For Normal mode, they work out what each range becomes on the grapheme boundaries of the whole
 string, merge the results, and compare them with `for_normal_mode`, for the generated ranges and

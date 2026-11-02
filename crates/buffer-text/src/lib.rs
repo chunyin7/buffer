@@ -14,4 +14,4 @@ mod transaction;
 pub use change::{Assoc, ChangeSet, InvalidChange};
 pub use document::Document;
 pub use selection::{Range, Selection};
-pub use text::Text;
+pub use text::{LineEdges, Text};
