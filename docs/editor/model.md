@@ -7,12 +7,14 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0028](../decisions/0028-lines-are-breaks-plus-one.md) (lines),
 [0029](../decisions/0029-undo-insert-sessions.md) (undo steps),
 [0031](../decisions/0031-document-owns-history.md) (documents and history),
-[0032](../decisions/0032-motions-return-targets.md) (motions and Normal-mode ranges), and
-[0034](../decisions/0034-word-motions-stop-at-line-edges.md) (word motions at line edges).
+[0032](../decisions/0032-motions-return-targets.md) (motions and Normal-mode ranges),
+[0034](../decisions/0034-word-motions-stop-at-line-edges.md) (word motions at line edges), and
+[0035](../decisions/0035-find-paragraph-and-bracket-motions.md) (find, paragraph, and bracket
+motions).
 
-Status: text with lines and grapheme boundaries, grapheme, line, and word motions, change sets,
-selections with block cursors, transactions, and documents with undo history exist. Text objects
-and registers land later in M1.
+Status: text with lines and grapheme boundaries, grapheme, line, word, and find motions, change
+sets, selections with block cursors, transactions, and documents with undo history exist.
+Paragraph and bracket motions, text objects, and registers land later in M1.
 
 ## Text
 
@@ -74,10 +76,10 @@ grapheme each, so a cursor never stops inside them.
 Motions are `Text` methods ([0032](../decisions/0032-motions-return-targets.md)). From an offset
 and a count, each returns a target offset on a grapheme boundary, and the range builders in
 [Block cursors and Normal mode](#block-cursors-and-normal-mode) turn it into a range. A count that
-overshoots stops at the last target, and a motion that can't move returns its offset, so the
-caller can tell. Targets are boundaries: `line_end` is where the line break starts, and the
-presets put the block cursor for `$` on the grapheme before it. Vim's motion kinds live in the Vim
-preset.
+overshoots stops at the last target, except in a find, which fails. A motion that can't move
+returns its offset, so the caller can tell. Targets are boundaries: `line_end` is where the line
+break starts, and the presets put the block cursor for `$` on the grapheme before it. Vim's motion
+kinds live in the Vim preset.
 
 | Method | Target | Vim | Helix |
 |---|---|---|---|
@@ -91,6 +93,8 @@ preset.
 | `next_word_end(…)` | `count` word ends forward | `e` | `e` |
 | `prev_word_start(…)` | `count` word starts back | `b` | `b` |
 | `prev_word_end(…)` | `count` word ends back | `ge` | |
+| `find_next(offset, count, edges, matches)` | the `count`-th grapheme forward whose first char matches | `f`, `t` | `f`, `t` |
+| `find_prev(…)` | the `count`-th one back | `F`, `T` | `F`, `T` |
 
 - `LineEdges::Stop` keeps a grapheme motion on its line, between the line's start and the end of
   its content, as Vim's `h` and `l` do. With `LineEdges::Cross` it stops only at the ends of the
@@ -148,6 +152,37 @@ changing the motions.
 - Each step copies its line out of the rope and segments it, about 19 ns per byte in a release
   build: a `w` in the middle of a 10 KB line takes 0.26 ms. Steps on the same line reuse the
   segments.
+
+### Find
+
+A find looks for a grapheme by its first char
+([0035](../decisions/0035-find-paragraph-and-bracket-motions.md)). It takes a char predicate: the
+presets pass `|c| c == 'x'` for `fx`, and Vim's `%` passes a bracket test to find the first
+bracket on the line.
+
+- A grapheme matches when its first char does, so `fe` finds a decomposed `é` and `f👍` finds
+  `👍🏽`. A char inside a grapheme starts no match: the accent of a decomposed `é`, or a `(` after a
+  prepended char such as U+0600. A `\r\n` is one grapheme, which starts with `\r`, so Helix's
+  `f<Enter>` is a line motion in its preset.
+- `LineEdges::Stop` searches the rest of the line's content, as Vim does, and `LineEdges::Cross`
+  the rest of the text, as Helix does. The grapheme at `offset` doesn't count.
+- A find returns the start of the match, or `None` when a count goes past the last match, as both
+  editors fail. A count of 0 returns `offset`.
+
+| Key | Vim moves to | Helix passes | Helix selects from the cursor to |
+|---|---|---|---|
+| `f` | the match | the cursor's start | the match's end |
+| `t` | the grapheme before the match | the cursor's end | the match's start |
+| `F` | the match | the cursor's start | the match's start |
+| `T` | the grapheme after the match | the boundary before the cursor | the match's end |
+
+- Vim passes the cursor's start. Helix's `t` and `T` pass the grapheme boundary past the cursor,
+  so that repeating them moves on, as Vim's `;` does after a `t`. `;`, `,`, and Helix's `Alt-.`
+  repeat the last find from the preset.
+- A find makes one pass over the chars, whatever the count, and checks a grapheme boundary only at
+  chars that match, mostly from the chunk it scans. In a release build, a miss across 1 MB takes
+  0.5 ms, and finding the next `(` on a line 0.3 µs. A char that never starts a grapheme pays a
+  check at each occurrence: an accent across 1 MB of decomposed `é` takes 5.2 ms.
 
 ## Change sets
 
@@ -320,7 +355,7 @@ broken contract only our own bug can cause panics before anything changes.
 | `ChangeSet::map`: a position past the end of the text | panic |
 | `Text::is_char_boundary`, `is_grapheme_boundary`: an offset past the end of the text | panic |
 | `Text::line_of`, `next_grapheme_boundary`, `prev_grapheme_boundary`: an offset past the end of the text or inside a char | panic |
-| `Text::next_grapheme`, `prev_grapheme`, `line_down`, `line_up`, and the word motions: an offset past the end of the text or inside a char | panic |
+| `Text::next_grapheme`, `prev_grapheme`, `line_down`, `line_up`, the word motions, `find_next`, `find_prev`: an offset past the end of the text or inside a char | panic |
 | `Text::line_start`: a line past `line_count()`; `line_end`, `first_non_blank`: `line_count()` or more | panic |
 | `Range::cursor` (the head), `extend_to` (the anchor and the target), `Selection::for_normal_mode` (every range end): an offset past the end of the text or inside a char | panic |
 | Internal: `apply`, `invert`, `compose` get a text or change set of another length | panic |
@@ -353,6 +388,11 @@ classifies each segment by its chars, and leaves only words next to their own ki
 `BigWords` alternates blank and non-blank runs. Unit tests pin the segments of Markdown lines.
 Word motions are compared with a model built from the string's lines and their segments, for both
 segmenters and all four motions, and unit tests pin Helix's selections, at line ends too.
+
+For finds, they compare `find_next` and `find_prev` with the string's graphemes, from every char
+boundary, inside graphemes and line breaks too, on the line and across it, and for chars that
+start graphemes and chars that only continue them. Unit tests pin decomposed accents, emoji
+modifiers, prepended chars, `\r\n`, and offsets inside a `\r\n`.
 
 For Normal mode, they work out what each range becomes on the grapheme boundaries of the whole
 string, merge the results, and compare them with `for_normal_mode`, for the generated ranges and

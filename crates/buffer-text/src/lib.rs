@@ -4,6 +4,7 @@
 
 mod change;
 mod document;
+mod find;
 mod history;
 mod selection;
 #[cfg(test)]
