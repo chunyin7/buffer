@@ -212,18 +212,28 @@ impl Text {
             let mut start = position;
             let (mut near, mut far) = edges(line);
 
-            // A step from the far edge starts at the next line's near edge, past the line break
-            // and any empty lines. At the end of the text there is no next line: the motion ends.
+            // A step that starts at its line's far edge has nothing left to cross on that line: it
+            // is at the end of the line's content going forward, or at its start going backward. It
+            // hops to the next line instead and starts at that line's near edge, so its span never
+            // holds a line break. In `"foo\n\nbar"`, `w` from the end of `foo` hops over the empty
+            // line to `b`, and its span is `bar`.
             while start == far {
+                // The line after going forward, the one before going backward.
                 let next = if forward {
                     (line < last).then(|| line + 1)
                 } else {
                     line.checked_sub(1)
                 };
+
+                // No such line: the step is at the end of the text going forward, or at its start
+                // going backward. The hops leave `from` and `position` alone, so the motion returns
+                // what the last step set, or `(None, offset)` if this is the first step.
                 let Some(next) = next else {
                     return (from, position);
                 };
 
+                // An empty line's near edge is also its far edge, so the loop runs again: empty
+                // lines are never stops.
                 line = next;
                 (near, far) = edges(line);
                 start = near;
