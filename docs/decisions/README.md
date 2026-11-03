@@ -70,3 +70,4 @@ Each rejected option with the reason. Omit the section if none were weighed.
 | [0032](0032-motions-return-targets.md) | Motions return targets; words follow Unicode |
 | [0033](0033-strict-keymap-trees.md) | Keymaps are strict trees, with no timeouts |
 | [0034](0034-word-motions-stop-at-line-edges.md) | Word motions stop at line edges, as Helix's do |
+| [0035](0035-find-paragraph-and-bracket-motions.md) | Find, paragraph, and bracket motions |

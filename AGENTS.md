@@ -146,6 +146,11 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
   - `j`/`k` in `buffer-text` move across lines split by line breaks, with a goal column in
     graphemes (revisit: display cells) that the caller keeps. Moving across soft-wrapped lines
     needs the layout and lands with the edit view.
+  - Finds match a grapheme by its first char, on the line (Vim) or across lines (Helix), and fail
+    when a count overshoots. Paragraphs are runs of lines that aren't blank (empty or all
+    whitespace): Vim's `{`/`}` stop on the blank line past one, Helix's `[p`/`]p` on its first
+    line. `%` matches `()`, `[]`, `{}`, and CJK brackets, counting nesting across lines. No scan
+    limits, and none of these motions knows Markdown.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.
