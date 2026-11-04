@@ -14,11 +14,11 @@ Code should always prioritise human readability and understandability. We want t
 
 - Pre-alpha: licenses, the workspace with the target crate layout, lints, cargo-deny, CI, and the
   README, CONTRIBUTING, architecture doc, and ADRs are in place. `buffer-app` opens an empty
-  window, `buffer-text` has text with lines and grapheme boundaries, grapheme, line, word, and
-  find motions, change sets, selections with block cursors, transactions, and documents with undo
-  history ([docs/editor/model.md](docs/editor/model.md)), and `buffer-modal` has keys and keymaps
-  ([docs/editor/keymaps.md](docs/editor/keymaps.md)). Everything else below is decided, not
-  implemented, unless marked otherwise.
+  window, `buffer-text` has text with lines and grapheme boundaries, grapheme, line, word, find,
+  and paragraph motions, change sets, selections with block cursors, transactions, and documents
+  with undo history ([docs/editor/model.md](docs/editor/model.md)), and `buffer-modal` has keys
+  and keymaps ([docs/editor/keymaps.md](docs/editor/keymaps.md)). Everything else below is
+  decided, not implemented, unless marked otherwise.
 - Current milestone: **M0 Foundations**; **M1 Editing** has started in `buffer-text` and
   `buffer-modal`. Milestones and planned docs: [docs/ROADMAP.md](docs/ROADMAP.md).
 - M0 still to do: baselines with docs/performance.md, the typst spike, and a first green CI run

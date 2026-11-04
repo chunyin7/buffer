@@ -12,9 +12,9 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0035](../decisions/0035-find-paragraph-and-bracket-motions.md) (find, paragraph, and bracket
 motions).
 
-Status: text with lines and grapheme boundaries, grapheme, line, word, and find motions, change
-sets, selections with block cursors, transactions, and documents with undo history exist.
-Paragraph and bracket motions, text objects, and registers land later in M1.
+Status: text with lines and grapheme boundaries, grapheme, line, word, find, and paragraph
+motions, change sets, selections with block cursors, transactions, and documents with undo
+history exist. Bracket motions, text objects, and registers land later in M1.
 
 ## Text
 
@@ -95,6 +95,10 @@ kinds live in the Vim preset.
 | `prev_word_end(…)` | `count` word ends back | `ge` | |
 | `find_next(offset, count, edges, matches)` | the `count`-th grapheme forward whose first char matches | `f`, `t` | `f`, `t` |
 | `find_prev(…)` | the `count`-th one back | `F`, `T` | `F`, `T` |
+| `next_blank_line(offset, count)` | `count` paragraphs forward, to the blank line after each | `}` | |
+| `prev_blank_line(…)` | `count` paragraphs back, to the blank line before each | `{` | |
+| `next_paragraph_start(offset, count)` | the start of the `count`-th paragraph after `offset` | | `]p` |
+| `prev_paragraph_start(…)` | the start of the `count`-th paragraph before `offset` | | `[p` |
 
 - `LineEdges::Stop` keeps a grapheme motion on its line, between the line's start and the end of
   its content, as Vim's `h` and `l` do. With `LineEdges::Cross` it stops only at the ends of the
@@ -183,6 +187,36 @@ bracket on the line.
   chars that match, mostly from the chunk it scans. In a release build, a miss across 1 MB takes
   0.5 ms, and finding the next `(` on a line 0.3 µs. A char that never starts a grapheme pays a
   check at each occurrence: an accent across 1 MB of decomposed `é` takes 5.2 ms.
+
+### Paragraphs
+
+A paragraph is a run of lines that aren't blank, and a blank line is empty or all whitespace, the
+blank of `first_non_blank` ([0035](../decisions/0035-find-paragraph-and-bracket-motions.md)). So a
+line of spaces splits paragraphs, as it does in the rendered note, where Vim and Helix would join
+them.
+
+- `next_blank_line` and `prev_blank_line` move as Vim's `}` and `{` do: past any blank lines, then
+  a paragraph, to the blank line past it. `{` never stops on the cursor's own line, even from
+  inside a line of spaces, except at the start of the text.
+- `next_paragraph_start` moves as Helix's `]p` does, to the first paragraph that starts after
+  `offset`, and `prev_paragraph_start` as its `[p` does, to the last one that starts before it.
+  From inside a paragraph's first line, `[p` goes to the line's start.
+- With no such line, a motion goes to the end or the start of the text, and a count that
+  overshoots stops there. Vim fails such a count; the Vim preset stops at the edge too.
+
+| Key | Vim passes | Helix passes | Helix selects from |
+|---|---|---|---|
+| `}` | the cursor's start | | |
+| `{` | the cursor's start | | |
+| `]p` | | the cursor's end | the cursor's end if a paragraph starts there, else its start |
+| `[p` | | the cursor's start | the cursor's start if a paragraph starts there, else its end |
+
+- After a `]p`, Helix's selection ends where a paragraph starts, and its cursor is on the line
+  break before it. Passing the cursor's end, the next `]p` moves on and selects that paragraph
+  and the blank lines after it.
+- A walk reads each char it passes once, however short the lines. In a release build, a walk
+  across 1 MB takes 0.8 ms over lines of Markdown, 1.2 ms over 4-byte lines, and 3 ms over a
+  million empty lines. Between paragraphs of prose, a step takes under 1 µs.
 
 ## Change sets
 
@@ -355,7 +389,7 @@ broken contract only our own bug can cause panics before anything changes.
 | `ChangeSet::map`: a position past the end of the text | panic |
 | `Text::is_char_boundary`, `is_grapheme_boundary`: an offset past the end of the text | panic |
 | `Text::line_of`, `next_grapheme_boundary`, `prev_grapheme_boundary`: an offset past the end of the text or inside a char | panic |
-| `Text::next_grapheme`, `prev_grapheme`, `line_down`, `line_up`, the word motions, `find_next`, `find_prev`: an offset past the end of the text or inside a char | panic |
+| `Text::next_grapheme`, `prev_grapheme`, `line_down`, `line_up`, the word motions, `find_next`, `find_prev`, the paragraph motions: an offset past the end of the text or inside a char | panic |
 | `Text::line_start`: a line past `line_count()`; `line_end`, `first_non_blank`: `line_count()` or more | panic |
 | `Range::cursor` (the head), `extend_to` (the anchor and the target), `Selection::for_normal_mode` (every range end): an offset past the end of the text or inside a char | panic |
 | Internal: `apply`, `invert`, `compose` get a text or change set of another length | panic |
@@ -393,6 +427,12 @@ For finds, they compare `find_next` and `find_prev` with the string's graphemes,
 boundary, inside graphemes and line breaks too, on the line and across it, and for chars that
 start graphemes and chars that only continue them. Unit tests pin decomposed accents, emoji
 modifiers, prepended chars, `\r\n`, and offsets inside a `\r\n`.
+
+For paragraphs, they compare the four motions with a model worked out from where the string's
+lines start and whether each is blank. Offsets are char boundaries, most often where a line
+starts, in texts of Unicode spaces, lone `\r`, `\r\n`, and chars that aren't blank, some long
+enough to span rope chunks. Unit tests pin Vim's and Helix's stops, lines of spaces, a space with
+a combining accent, `\r\n`, and a final line break.
 
 For Normal mode, they work out what each range becomes on the grapheme boundaries of the whole
 string, merge the results, and compare them with `for_normal_mode`, for the generated ranges and

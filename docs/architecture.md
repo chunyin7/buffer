@@ -5,9 +5,9 @@ decisions behind each part are in [decisions/](decisions/README.md); this doc sh
 connect.
 
 Status: the workspace and crate layout exist. `buffer-app` opens an empty window,
-`buffer-text` has text with lines and grapheme boundaries, grapheme, line, word, and find
-motions, change sets, selections with block cursors, transactions, and documents with undo history
-([editor/model.md](editor/model.md)), and `buffer-modal` has keys and keymaps
+`buffer-text` has text with lines and grapheme boundaries, grapheme, line, word, find, and
+paragraph motions, change sets, selections with block cursors, transactions, and documents with
+undo history ([editor/model.md](editor/model.md)), and `buffer-modal` has keys and keymaps
 ([editor/keymaps.md](editor/keymaps.md)). Everything else here is the target design.
 
 ## Crates
