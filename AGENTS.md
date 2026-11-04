@@ -10,6 +10,8 @@ As an agent when contributing to this project, keep contributions as atomic as p
 
 Code should always prioritise human readability and understandability. We want to minimise unnecessary layers of abstraction whenever possible. For non-trivial code changes, always prefer going through an atomic human code review process, where after completing a turn you should walk the user through your change to be reviewed.
 
+When adding tests, they should test non-trivial properties and should be added with intention.
+
 ## Status
 
 - Pre-alpha: licenses, the workspace with the target crate layout, lints, cargo-deny, CI, and the
