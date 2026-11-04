@@ -5,6 +5,11 @@ use crop::Rope;
 use crop::iter::Chunks;
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete, UnicodeSegmentation};
 
+mod find;
+mod words;
+
+pub use words::{BigWords, UnicodeWords, WordKind, Words};
+
 /// UTF-8 text in a rope, addressed by byte offsets.
 ///
 /// Clones are cheap and share structure (copy-on-write), so background work can read a snapshot
@@ -146,12 +151,7 @@ impl Text {
     /// [`is_grapheme_boundary`](Self::is_grapheme_boundary), but a scan that already holds the
     /// chunk usually finds the chars the answer depends on in it: 15 ns per check instead of 460,
     /// in a release build.
-    pub(crate) fn is_grapheme_boundary_in(
-        &self,
-        chunk: &str,
-        chunk_start: usize,
-        offset: usize,
-    ) -> bool {
+    fn is_grapheme_boundary_in(&self, chunk: &str, chunk_start: usize, offset: usize) -> bool {
         let mut cursor = GraphemeCursor::new(offset, self.len(), true);
         match cursor.is_boundary(chunk, chunk_start) {
             Ok(is_boundary) => is_boundary,
@@ -393,10 +393,7 @@ impl Text {
 
     /// The rope's chunks in `range`, each with where it starts: the text there, in pieces that
     /// end on char boundaries. Like [`str::char_indices`], it goes from either end.
-    pub(crate) fn chunks_in(
-        &self,
-        range: Range<usize>,
-    ) -> impl DoubleEndedIterator<Item = (usize, &str)> {
+    fn chunks_in(&self, range: Range<usize>) -> impl DoubleEndedIterator<Item = (usize, &str)> {
         ChunkIndices {
             chunks: self.rope.byte_slice(range.clone()).chunks(),
             front: range.start,
