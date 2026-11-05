@@ -21,20 +21,14 @@ const PAIRS: [(char, char); 12] = [
 /// Whether `ch` is one of the brackets [`Text::matching_bracket`] pairs. The Vim preset passes it
 /// to [`Text::find_next`] to find the bracket on the line that `%` jumps from.
 pub fn is_bracket(ch: char) -> bool {
-    partner(ch).is_some()
+    pair(ch).is_some()
 }
 
-/// The bracket that pairs with `ch`, and whether `ch` opens the pair: `(')', true)` for `'('`.
-fn partner(ch: char) -> Option<(char, bool)> {
-    PAIRS.iter().find_map(|&(open, close)| {
-        if ch == open {
-            Some((close, true))
-        } else if ch == close {
-            Some((open, false))
-        } else {
-            None
-        }
-    })
+/// The pair of brackets that `ch` opens or closes.
+fn pair(ch: char) -> Option<(char, char)> {
+    PAIRS
+        .into_iter()
+        .find(|&(open, close)| ch == open || ch == close)
 }
 
 impl Text {
@@ -61,55 +55,46 @@ impl Text {
             "offset {offset} is inside a char"
         );
         let bracket = self.rope.byte_slice(offset..).chars().next()?;
-        let (partner, opens) = partner(bracket)?;
+        let (open, close) = pair(bracket)?;
         if !self.is_grapheme_boundary(offset) {
             return None;
         }
 
         // The brackets of this kind that start graphemes, after `offset` or before it, each with
-        // whether it is the same bracket as the one at `offset`, which opens a nested pair. As in
-        // a find, only a bracket char pays for the grapheme check, which its chunk usually
-        // answers.
+        // whether it is the same bracket as the one at `offset`. As in a find, only a bracket
+        // char pays for the grapheme check, which its chunk usually answers.
+        let opens = bracket == open;
         let range = if opens {
             offset + bracket.len_utf8()..self.len()
         } else {
             0..offset
         };
-        let brackets = self.chunks_in(range).flat_map(|(chunk_start, chunk)| {
+        let mut brackets = self.chunks_in(range).flat_map(|(chunk_start, chunk)| {
             chunk
-                .match_indices([bracket, partner])
-                .map(move |(index, found)| (chunk_start + index, found.starts_with(bracket)))
-                .filter(move |&(position, _)| {
+                .match_indices([open, close])
+                .filter(move |&(index, _)| {
                     // A bracket starts a grapheme unless a prepended char such as U+0600 comes
                     // right before it (UAX #29, GB9b), and none is ASCII: after an ASCII byte,
                     // the check can be skipped. A test pins this against the Unicode tables.
-                    let index = position - chunk_start;
                     (index > 0 && chunk.as_bytes()[index - 1].is_ascii())
-                        || self.is_grapheme_boundary_in(chunk, chunk_start, position)
+                        || self.is_grapheme_boundary_in(chunk, chunk_start, chunk_start + index)
                 })
+                .map(move |(index, found)| (chunk_start + index, found.starts_with(bracket)))
         });
-        if opens {
-            unnested(brackets)
+        // The partner is the first bracket that closes no pair opened in between: one like the
+        // bracket at `offset` opens a pair, and any other closes one.
+        let mut depth = 0_isize;
+        let is_partner = |&(_, nests): &(usize, bool)| {
+            depth += if nests { 1 } else { -1 };
+            depth < 0
+        };
+        let partner = if opens {
+            brackets.find(is_partner)
         } else {
-            unnested(brackets.rev())
-        }
+            brackets.rfind(is_partner)
+        };
+        partner.map(|(position, _)| position)
     }
-}
-
-/// The first of `brackets` that closes no pair opened among them: where it starts. Each comes
-/// with whether it opens a pair, which the next bracket that doesn't open one closes.
-fn unnested(brackets: impl Iterator<Item = (usize, bool)>) -> Option<usize> {
-    let mut depth = 0_usize;
-    for (position, opens) in brackets {
-        if opens {
-            depth += 1;
-        } else if depth == 0 {
-            return Some(position);
-        } else {
-            depth -= 1;
-        }
-    }
-    None
 }
 
 #[cfg(test)]

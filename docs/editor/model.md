@@ -251,9 +251,9 @@ them.
   starting a grapheme (UAX #29, rule GB9b), and no prepended char is ASCII. A unit test checks
   this for every ASCII char and bracket, so a Unicode update that breaks it fails there.
 - In a release build, a partner 1 MB away takes 0.5 to 0.6 ms across prose, 0.9 to 1 ms across
-  Markdown with links, 1.2 to 1.3 ms across CJK text, and 1.6 ms across JSON, where 13% of the
-  chars are braces. A bracket with no partner takes 0.6 ms across 1 MB of prose, a pair on one
-  line under 1 µs, and a scan across 1 MB of nothing but `()` 8 ms.
+  Markdown with links, 1.2 to 1.3 ms across CJK text, and 1.1 to 1.3 ms across JSON, where 13% of
+  the chars are braces. A bracket with no partner takes 0.6 ms across 1 MB of prose, a pair on one
+  line under 1 µs, and a scan across 1 MB of nothing but `()` 4 to 5 ms.
 
 ## Change sets
 
