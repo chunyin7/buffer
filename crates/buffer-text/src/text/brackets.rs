@@ -80,7 +80,12 @@ impl Text {
                 .match_indices([bracket, partner])
                 .map(move |(index, found)| (chunk_start + index, found.starts_with(bracket)))
                 .filter(move |&(position, _)| {
-                    self.is_grapheme_boundary_in(chunk, chunk_start, position)
+                    // A bracket starts a grapheme unless a prepended char such as U+0600 comes
+                    // right before it (UAX #29, GB9b), and none is ASCII: after an ASCII byte,
+                    // the check can be skipped. A test pins this against the Unicode tables.
+                    let index = position - chunk_start;
+                    (index > 0 && chunk.as_bytes()[index - 1].is_ascii())
+                        || self.is_grapheme_boundary_in(chunk, chunk_start, position)
                 })
         });
         if opens {
@@ -163,6 +168,18 @@ mod tests {
         assert_eq!(text.matching_bracket(0), Some(6));
         assert_eq!(text.matching_bracket(6), Some(0));
         assert_eq!(text.matching_bracket(4), None);
+    }
+
+    /// `matching_bracket` skips the grapheme check for a bracket after an ASCII char. This fails
+    /// if a Unicode update ever joins an ASCII char to the bracket after it.
+    #[test]
+    fn every_bracket_after_an_ascii_char_starts_a_grapheme() {
+        for ascii in (0..=0x7f_u8).map(char::from) {
+            for bracket in PAIRS.iter().flat_map(|&(open, close)| [open, close]) {
+                let text = Text::from(format!("{ascii}{bracket}"));
+                assert!(text.is_grapheme_boundary(1), "{ascii:?} before {bracket:?}");
+            }
+        }
     }
 
     /// Pieces of text with brackets of three kinds: one with a combining accent, which is still

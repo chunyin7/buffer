@@ -245,12 +245,15 @@ them.
 
 - The Vim preset finds the bracket after the cursor with `find_next`, `LineEdges::Stop`, and
   `is_bracket`.
-- A scan reads each char once on the way to the partner, and checks a grapheme boundary only at
-  brackets of the pair's kind, mostly from the chunk it scans. In a release build, a partner 1 MB
-  away takes 0.7 to 0.9 ms across prose, 1.4 to 1.8 ms across Markdown with links or across CJK
-  text, and 3.4 to 3.6 ms across JSON, where 13% of the chars are braces. A bracket with no
-  partner takes 0.6 ms across 1 MB of prose, and a pair on one line under 1 µs. Each bracket of
-  the kind pays its check: across 1 MB of nothing but `()`, a scan takes 20 ms.
+- A scan reads each char once on the way to the partner and checks a grapheme boundary only at
+  brackets of the pair's kind, mostly from the chunk it scans. A bracket right after an ASCII char
+  skips the check: only a prepended char right before a bracket, such as U+0600, keeps it from
+  starting a grapheme (UAX #29, rule GB9b), and no prepended char is ASCII. A unit test checks
+  this for every ASCII char and bracket, so a Unicode update that breaks it fails there.
+- In a release build, a partner 1 MB away takes 0.5 to 0.6 ms across prose, 0.9 to 1 ms across
+  Markdown with links, 1.2 to 1.3 ms across CJK text, and 1.6 ms across JSON, where 13% of the
+  chars are braces. A bracket with no partner takes 0.6 ms across 1 MB of prose, a pair on one
+  line under 1 µs, and a scan across 1 MB of nothing but `()` 8 ms.
 
 ## Change sets
 
@@ -473,7 +476,8 @@ its start, over its graphemes, closing the last bracket of each kind still open.
 boundaries, most often where a bracket char is, in texts of three kinds of brackets, brackets
 with a combining accent or after a prepended char, and line breaks, some long enough to span rope
 chunks. Unit tests pin nesting, other kinds inside a pair, pairs across lines, CJK and full-width
-pairs, angle brackets and curly quotes, and brackets inside graphemes.
+pairs, angle brackets and curly quotes, and brackets inside graphemes. Another checks that a
+grapheme starts at every bracket after an ASCII char, which lets a scan skip the check there.
 
 For Normal mode, they work out what each range becomes on the grapheme boundaries of the whole
 string, merge the results, and compare them with `for_normal_mode`, for the generated ranges and
