@@ -5,10 +5,12 @@ use crop::Rope;
 use crop::iter::Chunks;
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete, UnicodeSegmentation};
 
+mod brackets;
 mod find;
 mod paragraphs;
 mod words;
 
+pub use brackets::is_bracket;
 pub use words::{BigWords, UnicodeWords, WordKind, Words};
 
 /// UTF-8 text in a rope, addressed by byte offsets.

@@ -12,9 +12,9 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0035](../decisions/0035-find-paragraph-and-bracket-motions.md) (find, paragraph, and bracket
 motions).
 
-Status: text with lines and grapheme boundaries, grapheme, line, word, find, and paragraph
-motions, change sets, selections with block cursors, transactions, and documents with undo
-history exist. Bracket motions, text objects, and registers land later in M1.
+Status: text with lines and grapheme boundaries, grapheme, line, word, find, paragraph, and
+bracket motions, change sets, selections with block cursors, transactions, and documents with
+undo history exist. Text objects and registers land later in M1.
 
 ## Text
 
@@ -77,9 +77,9 @@ Motions are `Text` methods ([0032](../decisions/0032-motions-return-targets.md))
 and a count, each returns a target offset on a grapheme boundary, and the range builders in
 [Block cursors and Normal mode](#block-cursors-and-normal-mode) turn it into a range. A count that
 overshoots stops at the last target, except in a find, which fails. A motion that can't move
-returns its offset, so the caller can tell. Targets are boundaries: `line_end` is where the line
-break starts, and the presets put the block cursor for `$` on the grapheme before it. Vim's motion
-kinds live in the Vim preset.
+returns its offset, so the caller can tell; a find and a bracket match return `None` instead.
+Targets are boundaries: `line_end` is where the line break starts, and the presets put the block
+cursor for `$` on the grapheme before it. Vim's motion kinds live in the Vim preset.
 
 | Method | Target | Vim | Helix |
 |---|---|---|---|
@@ -99,6 +99,7 @@ kinds live in the Vim preset.
 | `prev_blank_line(…)` | `count` paragraphs back, to the blank line before each | `{` | |
 | `next_paragraph_start(offset, count)` | the start of the `count`-th paragraph after `offset` | | `]p` |
 | `prev_paragraph_start(…)` | the start of the `count`-th paragraph before `offset` | | `[p` |
+| `matching_bracket(offset)` | the partner of the bracket at `offset` | `%` | `mm` |
 
 - `LineEdges::Stop` keeps a grapheme motion on its line, between the line's start and the end of
   its content, as Vim's `h` and `l` do. With `LineEdges::Cross` it stops only at the ends of the
@@ -217,6 +218,39 @@ them.
 - A walk reads each char it passes once, however short the lines. In a release build, a walk
   across 1 MB takes 0.8 ms over lines of Markdown, 1.2 ms over 4-byte lines, and 3 ms over a
   million empty lines. Between paragraphs of prose, a step takes under 1 µs.
+
+### Brackets
+
+`matching_bracket(offset)` goes from a bracket to its partner, as Vim's `%` and Helix's `mm` do
+([0035](../decisions/0035-find-paragraph-and-bracket-motions.md)).
+
+- The pairs are `()`, `[]`, `{}`, and the full-width and CJK brackets `（）`, `［］`, `｛｝`, `「」`,
+  `『』`, `【】`, `〈〉`, `《》`, and `〔〕`, but not `<>` or curly quotes: in prose, `>` also starts
+  quotes and arrows, and `’` is also an apostrophe. `is_bracket(ch)` tells whether a char is one
+  of them.
+- A bracket is a grapheme whose first char is one, as in a find: a `(` with a combining accent is
+  a bracket, and a `(` after a prepended char such as U+0600 is inside that char's grapheme, so it
+  is none.
+- An opening bracket's partner is the first closing bracket of its kind after it that closes no
+  pair opened in between, on any line; a closing bracket's is the opening one found the same way
+  back. Brackets of other kinds don't count, and quotes hide none: in `(a [b) c]`, the `(` pairs
+  with the `)`.
+- It returns where the partner starts, or `None` if no bracket starts at `offset` or it has no
+  partner.
+
+| Key | Vim passes | Helix passes |
+|---|---|---|
+| `%` | the cursor's start if a bracket starts there, else the first bracket after it on the line | |
+| `mm` | | the cursor's start |
+
+- The Vim preset finds the bracket after the cursor with `find_next`, `LineEdges::Stop`, and
+  `is_bracket`.
+- A scan reads each char once on the way to the partner, and checks a grapheme boundary only at
+  brackets of the pair's kind, mostly from the chunk it scans. In a release build, a partner 1 MB
+  away takes 0.7 to 0.9 ms across prose, 1.4 to 1.8 ms across Markdown with links or across CJK
+  text, and 3.4 to 3.6 ms across JSON, where 13% of the chars are braces. A bracket with no
+  partner takes 0.6 ms across 1 MB of prose, and a pair on one line under 1 µs. Each bracket of
+  the kind pays its check: across 1 MB of nothing but `()`, a scan takes 20 ms.
 
 ## Change sets
 
@@ -389,7 +423,7 @@ broken contract only our own bug can cause panics before anything changes.
 | `ChangeSet::map`: a position past the end of the text | panic |
 | `Text::is_char_boundary`, `is_grapheme_boundary`: an offset past the end of the text | panic |
 | `Text::line_of`, `next_grapheme_boundary`, `prev_grapheme_boundary`: an offset past the end of the text or inside a char | panic |
-| `Text::next_grapheme`, `prev_grapheme`, `line_down`, `line_up`, the word motions, `find_next`, `find_prev`, the paragraph motions: an offset past the end of the text or inside a char | panic |
+| `Text::next_grapheme`, `prev_grapheme`, `line_down`, `line_up`, the word motions, `find_next`, `find_prev`, the paragraph motions, `matching_bracket`: an offset past the end of the text or inside a char | panic |
 | `Text::line_start`: a line past `line_count()`; `line_end`, `first_non_blank`: `line_count()` or more | panic |
 | `Range::cursor` (the head), `extend_to` (the anchor and the target), `Selection::for_normal_mode` (every range end): an offset past the end of the text or inside a char | panic |
 | Internal: `apply`, `invert`, `compose` get a text or change set of another length | panic |
@@ -433,6 +467,13 @@ lines start and whether each is blank. Offsets are char boundaries, most often w
 starts, in texts of Unicode spaces, lone `\r`, `\r\n`, and chars that aren't blank, some long
 enough to span rope chunks. Unit tests pin Vim's and Helix's stops, lines of spaces, a space with
 a combining accent, `\r\n`, and a final line break.
+
+For brackets, they compare `matching_bracket` with a model that pairs the string's brackets from
+its start, over its graphemes, closing the last bracket of each kind still open. Offsets are char
+boundaries, most often where a bracket char is, in texts of three kinds of brackets, brackets
+with a combining accent or after a prepended char, and line breaks, some long enough to span rope
+chunks. Unit tests pin nesting, other kinds inside a pair, pairs across lines, CJK and full-width
+pairs, angle brackets and curly quotes, and brackets inside graphemes.
 
 For Normal mode, they work out what each range becomes on the grapheme boundaries of the whole
 string, merge the results, and compare them with `for_normal_mode`, for the generated ranges and
