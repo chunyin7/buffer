@@ -213,6 +213,14 @@ bracket on the line.
   chars that match, mostly from the chunk it scans. In a release build, a miss across 1 MB takes
   0.5 ms, and finding the next `(` on a line 0.3 µs. A char that never starts a grapheme pays a
   check at each occurrence: an accent across 1 MB of decomposed `é` takes 5.2 ms.
+- Known limit: finding a regional indicator, half of a flag, inside a long run of flags is
+  quadratic. Each match checks its grapheme boundary on its own, and inside the run that check
+  reads back to the start of the run, which pairs the run into flags; from the second chunk of a
+  run on, the chunk can't answer, so the check reads the rope. A miss across 10k flags (80 KB)
+  takes 280 ms, and across 30k flags 2.4 s. A fix was tried and left out: in one run, whether
+  each indicator starts a grapheme alternates, so the last one checked answers the next. That
+  made such a miss linear (2 ms per MB), but checking every match for a regional indicator
+  slowed other finds by up to 23%, and the case is rare. Revisit if long runs of flags turn up.
 
 ### Paragraphs
 
