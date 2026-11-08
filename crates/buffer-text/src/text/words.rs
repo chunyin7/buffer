@@ -43,13 +43,18 @@ pub struct UnicodeWords;
 impl Words for UnicodeWords {
     fn segments(&self, line: &str) -> Vec<(usize, WordKind)> {
         let mut segments: Vec<(usize, WordKind)> = Vec::new();
+        // The grapheme boundaries, walked alongside the word boundaries. A cursor of its own at
+        // each word boundary would scan a run of regional indicators back to its start, so a
+        // run of flags would cost time in proportion to its length squared.
+        let mut graphemes = line.grapheme_indices(true).map(|(at, _)| at).peekable();
         for (start, piece) in line.split_word_bound_indices() {
             let end = start + piece.len();
             let kind = kind_of(piece);
+            while graphemes.next_if(|&at| at < start).is_some() {}
             match segments.last_mut() {
                 // UAX #29 can break inside a grapheme, after a prepended char such as U+0600
                 // ARABIC NUMBER SIGN; the grapheme stays whole.
-                Some(last) if !is_grapheme_boundary(line, start) => {
+                Some(last) if graphemes.peek() != Some(&start) => {
                     *last = (end, joined(last.1, kind))
                 }
                 Some(last) if last.1 == kind && kind != WordKind::Word => last.0 = end,

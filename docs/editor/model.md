@@ -137,7 +137,9 @@ same result ([0036](../decisions/0036-word-motions-segment-a-window.md)).
   letter or digit is a word: `don't`, `3.14`, `example.com`, `foo_bar`. Ideographs and hiragana
   are a word per char, and a run of katakana is one word. UAX #29 can break inside a grapheme,
   after a prepended char such as U+0600; the segment there stays whole, so a motion never stops
-  inside a grapheme.
+  inside a grapheme. The grapheme boundaries come from one pass alongside the word boundaries: a
+  lookup at each break would read a run of flags, a word segment per flag, back to its start
+  each time.
 - `BigWords` splits only at blank graphemes: WORDs, for `W`, `B`, and `E`.
 - Both restart where a word starts after a blank: a whitespace char that is a grapheme of its own,
   then a letter or digit after a word boundary. `restarts_between` gets three chars, because a
@@ -168,8 +170,8 @@ same result ([0036](../decisions/0036-word-motions-segment-a-window.md)).
   at least 256 bytes until it reaches the line's edge; pieces meet at restart points, so nothing
   is segmented twice. Steps on the same line reuse the window. A step costs about 0.5 µs plus
   14 ns per byte it segments in a release build: 5 to 8 µs anywhere in a 1 MB line of prose. A
-  line without restart points, such as minified code or CJK prose without spaces, is segmented
-  whole: about 20 ms for 1 MB.
+  line without restart points, such as minified code, CJK prose without spaces, or a run of
+  flags, is segmented whole: about 20 ms for 1 MB of minified code, 12 ms for 1 MB of flags.
 
 ### Find
 
