@@ -68,6 +68,12 @@ grapheme each, so a cursor never stops inside them.
   decides a chunk's start while it still holds the chunk before it, so the bug doesn't reach it.
 - Each call costs a few rope lookups, O(log n), plus the chars the rules read around the offset:
   the grapheme it crosses and, inside a run of regional indicators, the run before it.
+- A scan that steps on from a boundary it found reads nothing before it. The text from a grapheme
+  boundary on splits into the same graphemes alone as in the whole text: a run of regional
+  indicators holds an even number of them before a boundary, and the rules that join emoji and
+  Indic conjuncts never reach back past one (UAX #29, GB9, GB9c, GB11). So `next_grapheme` and
+  vertical moves read a run of flags once, where a lookup at each flag would read the run back to
+  its start each time and cost O(run²).
 - crop's `graphemes` feature stays off: its `is_grapheme_boundary` walks chunks back from the end
   of the text, so its cost grows with the distance to the end.
 
@@ -119,7 +125,8 @@ cursor for `$` on the grapheme before it. Vim's motion kinds live in the Vim pre
   they need. A run of ASCII is one grapheme per byte, so it takes a byte scan instead of the
   segmenter: about 1 ms per MB in a release build. Elsewhere unicode-segmentation splits each
   chunk, at about 20 ns per grapheme. A vertical move costs O(column): from the line's start to
-  `offset` without a goal, and to the goal on the line it moves to.
+  `offset` without a goal, and to the goal on the line it moves to. `next_grapheme` walks the
+  same way after its first step, so a count costs O(count).
 - Moving across soft-wrapped lines lands with the edit view.
 
 ### Word motions

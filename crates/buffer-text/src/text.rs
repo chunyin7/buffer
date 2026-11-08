@@ -1,8 +1,8 @@
 use std::fmt;
 use std::ops::Range;
 
-use crop::Rope;
 use crop::iter::Chunks;
+use crop::{Rope, RopeSlice};
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete, UnicodeSegmentation};
 
 mod brackets;
@@ -129,24 +129,7 @@ impl Text {
     ///
     /// Panics if `offset` is past the end of the text.
     pub fn is_grapheme_boundary(&self, offset: usize) -> bool {
-        if !self.is_char_boundary(offset) {
-            return false;
-        }
-        // At the end of the text there is no chunk, and the cursor needs none.
-        let chunk = self
-            .rope
-            .byte_slice(offset..)
-            .chunks()
-            .next()
-            .unwrap_or_default();
-        let mut cursor = GraphemeCursor::new(offset, self.len(), true);
-        loop {
-            match cursor.is_boundary(chunk, offset) {
-                Ok(is_boundary) => return is_boundary,
-                Err(GraphemeIncomplete::PreContext(end)) => self.provide_context(&mut cursor, end),
-                Err(error) => unreachable!("grapheme cursor in its own chunk: {error:?}"),
-            }
-        }
+        self.is_char_boundary(offset) && is_grapheme_boundary(self.rope.byte_slice(..), offset)
     }
 
     /// Whether `offset`, a char boundary inside `chunk`, a chunk of this text that starts at
@@ -169,34 +152,23 @@ impl Text {
     /// # Panics
     ///
     /// Panics if `offset` is past the end of the text or inside a char.
-    #[expect(
-        clippy::expect_used,
-        reason = "the cursor asks for the next chunk only before the end of the text"
-    )]
     pub fn next_grapheme_boundary(&self, offset: usize) -> usize {
-        let len = self.len();
-        let mut chunks = self.rope.byte_slice(offset..).chunks();
-        let mut chunk = chunks.next().unwrap_or_default();
-        let mut chunk_start = offset;
-        let mut cursor = GraphemeCursor::new(offset, len, true);
-        loop {
-            match cursor.next_boundary(chunk, chunk_start) {
-                Ok(boundary) => return boundary.unwrap_or(len),
-                Err(GraphemeIncomplete::NextChunk) => {
-                    // The cursor needs the next chunk to decide this chunk's end. One that gets a
-                    // second chunk can count a regional indicator twice (unicode-segmentation
-                    // 1.13.3) and split a flag, so a fresh cursor decides, and a new one goes on.
-                    chunk_start += chunk.len();
-                    if self.is_grapheme_boundary(chunk_start) {
-                        return chunk_start;
-                    }
-                    chunk = chunks.next().expect("the text goes on after this chunk");
-                    cursor = GraphemeCursor::new(chunk_start, len, true);
-                }
-                Err(GraphemeIncomplete::PreContext(end)) => self.provide_context(&mut cursor, end),
-                Err(error) => unreachable!("grapheme cursor going forward: {error:?}"),
-            }
-        }
+        next_grapheme_boundary(self.rope.byte_slice(..), offset)
+    }
+
+    /// Where the grapheme that starts at `start`, a grapheme boundary, ends, as
+    /// [`next_grapheme_boundary`](Self::next_grapheme_boundary) finds it, but without reading
+    /// the text before `start`. That one reads back as far as a rule looks: inside a run of
+    /// regional indicators, to the start of the run, so a scan through a run of flags that called
+    /// it at each flag would cost time in proportion to the run's length squared.
+    ///
+    /// The text from a grapheme boundary on splits into the same graphemes alone as it does in
+    /// the whole text. Only regional indicators and the rules that join emoji and Indic
+    /// conjuncts look back more than one char, and none past a boundary: a run of regional
+    /// indicators holds an even number of them before a boundary inside it, and the other two
+    /// join across chars that no boundary comes before (UAX #29, GB9, GB9c, GB11).
+    fn grapheme_end(&self, start: usize) -> usize {
+        start + next_grapheme_boundary(self.rope.byte_slice(start..), 0)
     }
 
     /// The last grapheme boundary before `offset`, or 0 if `offset` is 0. From inside a grapheme,
@@ -223,26 +195,12 @@ impl Text {
                         .expect("the text goes on before this chunk");
                     chunk_start -= chunk.len();
                 }
-                Err(GraphemeIncomplete::PreContext(end)) => self.provide_context(&mut cursor, end),
+                Err(GraphemeIncomplete::PreContext(end)) => {
+                    provide_context(self.rope.byte_slice(..), &mut cursor, end)
+                }
                 Err(error) => unreachable!("grapheme cursor going backward: {error:?}"),
             }
         }
-    }
-
-    /// Gives `cursor` the chunk that ends at `end`. It asks for one when a rule needs the chars
-    /// before the chunks it has, such as the regional indicators before a flag.
-    #[expect(
-        clippy::expect_used,
-        reason = "the cursor asks for context only before an offset past the start of the text"
-    )]
-    fn provide_context(&self, cursor: &mut GraphemeCursor, end: usize) {
-        let chunk = self
-            .rope
-            .byte_slice(..end)
-            .chunks()
-            .next_back()
-            .expect("there is text before `end`");
-        cursor.provide_context(chunk, end - chunk.len());
     }
 
     /// Moves `count` graphemes forward from `offset`, as `l` does. With [`LineEdges::Stop`] it
@@ -264,14 +222,13 @@ impl Text {
                 self.len()
             }
         };
-        let mut target = offset;
-        for _ in 0..count {
-            if target >= end {
-                break;
-            }
-            target = self.next_grapheme_boundary(target);
+        if count == 0 || offset >= end {
+            return offset;
         }
-        target
+        // The first step can start inside a grapheme; the rest start at the boundary it found, so
+        // they walk on through the chunks, as a vertical move does.
+        let first = self.next_grapheme_boundary(offset);
+        self.walk_graphemes(first, end, count - 1).0
     }
 
     /// Moves `count` graphemes back from `offset`, as `h` does. With [`LineEdges::Stop`] it
@@ -410,12 +367,9 @@ impl Text {
                     match chunk.as_bytes().get(position - chunk_start) {
                         Some(next) if next.is_ascii() || steps == max => break,
                         Some(_) => {}
-                        // The chunk's end needn't be a boundary: the next chunk can extend it.
-                        None => {
-                            if !self.is_grapheme_boundary(position) {
-                                position = self.next_grapheme_boundary(position);
-                            }
-                        }
+                        // The chunk's end needn't be a boundary: the next chunk can extend the
+                        // grapheme, which starts at a boundary.
+                        None => position = self.grapheme_end(position - grapheme.len()),
                     }
                 }
             }
@@ -464,6 +418,72 @@ fn ascii_graphemes(text: &str, ends_text: bool) -> usize {
         None if ends_text => run,
         _ => run.saturating_sub(1),
     }
+}
+
+/// Whether `offset`, a char boundary of `text`, is a grapheme boundary of `text`, which is the
+/// whole text or the part of it from a grapheme boundary on.
+fn is_grapheme_boundary(text: RopeSlice<'_>, offset: usize) -> bool {
+    // At the end of the text there is no chunk, and the cursor needs none.
+    let chunk = text
+        .byte_slice(offset..)
+        .chunks()
+        .next()
+        .unwrap_or_default();
+    let mut cursor = GraphemeCursor::new(offset, text.byte_len(), true);
+    loop {
+        match cursor.is_boundary(chunk, offset) {
+            Ok(is_boundary) => return is_boundary,
+            Err(GraphemeIncomplete::PreContext(end)) => provide_context(text, &mut cursor, end),
+            Err(error) => unreachable!("grapheme cursor in its own chunk: {error:?}"),
+        }
+    }
+}
+
+/// The first grapheme boundary of `text` after `offset`, or the end of `text` if `offset` is
+/// there; see [`is_grapheme_boundary`].
+#[expect(
+    clippy::expect_used,
+    reason = "the cursor asks for the next chunk only before the end of the text"
+)]
+fn next_grapheme_boundary(text: RopeSlice<'_>, offset: usize) -> usize {
+    let len = text.byte_len();
+    let mut chunks = text.byte_slice(offset..).chunks();
+    let mut chunk = chunks.next().unwrap_or_default();
+    let mut chunk_start = offset;
+    let mut cursor = GraphemeCursor::new(offset, len, true);
+    loop {
+        match cursor.next_boundary(chunk, chunk_start) {
+            Ok(boundary) => return boundary.unwrap_or(len),
+            Err(GraphemeIncomplete::NextChunk) => {
+                // The cursor needs the next chunk to decide this chunk's end. One that gets a
+                // second chunk can count a regional indicator twice (unicode-segmentation
+                // 1.13.3) and split a flag, so a fresh cursor decides, and a new one goes on.
+                chunk_start += chunk.len();
+                if is_grapheme_boundary(text, chunk_start) {
+                    return chunk_start;
+                }
+                chunk = chunks.next().expect("the text goes on after this chunk");
+                cursor = GraphemeCursor::new(chunk_start, len, true);
+            }
+            Err(GraphemeIncomplete::PreContext(end)) => provide_context(text, &mut cursor, end),
+            Err(error) => unreachable!("grapheme cursor going forward: {error:?}"),
+        }
+    }
+}
+
+/// Gives `cursor` the chunk of `text` that ends at `end`. It asks for one when a rule needs the
+/// chars before the chunks it has, such as the regional indicators before a flag.
+#[expect(
+    clippy::expect_used,
+    reason = "the cursor asks for context only before an offset past the start of the text"
+)]
+fn provide_context(text: RopeSlice<'_>, cursor: &mut GraphemeCursor, end: usize) {
+    let chunk = text
+        .byte_slice(..end)
+        .chunks()
+        .next_back()
+        .expect("there is text before `end`");
+    cursor.provide_context(chunk, end - chunk.len());
 }
 
 impl From<&str> for Text {
@@ -611,6 +631,25 @@ mod tests {
             prop_assert_eq!(text.next_grapheme(offset, count, stop), forward.min(line_end));
             prop_assert_eq!(text.prev_grapheme(offset, count, cross), backward);
             prop_assert_eq!(text.prev_grapheme(offset, count, stop), backward.max(line_start));
+        }
+
+        /// Long counts through runs that span chunks, where each step after the first starts
+        /// at a boundary it found, inside a run of regional indicators among others.
+        #[test]
+        fn long_grapheme_motions_step_through_boundaries(
+            (string, offset) in runs().prop_flat_map(|text| {
+                let offset = select(strategies::grapheme_boundaries(&text));
+                (Just(text), offset)
+            }),
+            count in 0..1024_usize,
+        ) {
+            let text = Text::from(string.as_str());
+            let boundaries = strategies::grapheme_boundaries(&string);
+            let index = boundaries.binary_search(&offset).unwrap();
+            let forward = boundaries[(index + count).min(boundaries.len() - 1)];
+            let backward = boundaries[index.saturating_sub(count)];
+            prop_assert_eq!(text.next_grapheme(offset, count, LineEdges::Cross), forward);
+            prop_assert_eq!(text.prev_grapheme(offset, count, LineEdges::Cross), backward);
         }
 
         #[test]
