@@ -367,22 +367,60 @@ impl Text {
         to: usize,
         goal: Option<usize>,
     ) -> (usize, usize) {
-        // Segmenting a copy of the line costs about a seventh of stepping through it with
-        // `next_grapheme_boundary`: 17 ns per grapheme against 120 to 185.
-        let goal = goal.unwrap_or_else(|| {
-            let start = self.line_start(from);
-            self.to_string_in(start..offset).graphemes(true).count()
-        });
+        // The column counts graphemes from the line's start, so a move costs time in proportion
+        // to it: about 1 ms per MB of ASCII, 20 ns per grapheme elsewhere (docs/editor/model.md).
+        let start = self.line_start(from);
+        let goal = goal.unwrap_or_else(|| self.walk_graphemes(start, offset, usize::MAX).1);
         if to == from {
             return (offset, goal);
         }
-        let (start, end) = (self.line_start(to), self.line_end(to));
         let target = self
-            .to_string_in(start..end)
-            .grapheme_indices(true)
-            .nth(goal)
-            .map_or(end, |(index, _)| start + index);
+            .walk_graphemes(self.line_start(to), self.line_end(to), goal)
+            .0;
         (target, goal)
+    }
+
+    /// Steps grapheme by grapheme from `from`, a grapheme boundary, while it is before `limit`
+    /// and has taken fewer than `max` steps. Returns where it stops and the steps it took: from
+    /// inside a grapheme at `limit`, it stops at that grapheme's end, past `limit`.
+    ///
+    /// It reads the rope's chunks in place and takes a run of ASCII graphemes in one step (see
+    /// [`ascii_graphemes`]). Past a run, unicode-segmentation splits the chunk up to the next
+    /// ASCII char: from a grapheme boundary it finds the boundaries the whole text has there,
+    /// except that the chunk's end needn't be one.
+    fn walk_graphemes(&self, from: usize, limit: usize, max: usize) -> (usize, usize) {
+        let (mut position, mut steps, len) = (from, 0, self.len());
+        for (chunk_start, chunk) in self.chunks_in(from..limit) {
+            let chunk_end = chunk_start + chunk.len();
+            // A grapheme that crosses chunks can end past this one.
+            while position < chunk_end {
+                if steps == max {
+                    return (position, steps);
+                }
+                let rest = &chunk[position - chunk_start..];
+                let ascii = ascii_graphemes(rest, chunk_end == len).min(max - steps);
+                if ascii > 0 {
+                    position += ascii;
+                    steps += ascii;
+                    continue;
+                }
+                for grapheme in rest.graphemes(true) {
+                    position += grapheme.len();
+                    steps += 1;
+                    match chunk.as_bytes().get(position - chunk_start) {
+                        Some(next) if next.is_ascii() || steps == max => break,
+                        Some(_) => {}
+                        // The chunk's end needn't be a boundary: the next chunk can extend it.
+                        None => {
+                            if !self.is_grapheme_boundary(position) {
+                                position = self.next_grapheme_boundary(position);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (position, steps)
     }
 
     /// Copies the bytes in `range` into a new string.
@@ -407,6 +445,24 @@ impl Text {
     /// Replaces the bytes in `range` with `text`.
     pub(crate) fn replace(&mut self, range: Range<usize>, text: &str) {
         self.rope.replace(range, text);
+    }
+}
+
+/// How many graphemes at the start of `text`, which starts at a grapheme boundary, are surely
+/// single ASCII bytes. An ASCII char is a grapheme of its own unless it is the `\r` of a `\r\n`
+/// or a later char joins it, such as a combining accent; another ASCII char never does. So in a
+/// run of ASCII without `\r`, only the last byte is in doubt, and only when a non-ASCII char or
+/// the end of `text` follows it, unless `text` ends the whole text.
+fn ascii_graphemes(text: &str, ends_text: bool) -> usize {
+    let bytes = text.as_bytes();
+    let run = bytes
+        .iter()
+        .position(|&byte| !byte.is_ascii() || byte == b'\r')
+        .unwrap_or(bytes.len());
+    match bytes.get(run) {
+        Some(b'\r') => run,
+        None if ends_text => run,
+        _ => run.saturating_sub(1),
     }
 }
 
@@ -464,7 +520,6 @@ mod tests {
     use proptest::collection::vec;
     use proptest::prelude::*;
     use proptest::sample::select;
-    use unicode_segmentation::UnicodeSegmentation;
 
     use super::*;
     use crate::strategies;
@@ -581,7 +636,13 @@ mod tests {
 
         #[test]
         fn vertical_motions_keep_the_goal_column(
-            (string, offset) in strategies::text_and_grapheme_boundary(),
+            (string, offset) in prop_oneof![
+                strategies::text_and_grapheme_boundary(),
+                long_lines().prop_flat_map(|text| {
+                    let offset = select(strategies::grapheme_boundaries(&text));
+                    (Just(text), offset)
+                }),
+            ],
             count in 0..4_usize,
             goal in prop_oneof![Just(None), (0..12_usize).prop_map(Some), Just(Some(usize::MAX))],
             down in any::<bool>(),
@@ -672,5 +733,36 @@ mod tests {
             .prop_map(|(piece, bytes)| piece.repeat(bytes / piece.len()));
         (strategies::text(), run, strategies::text())
             .prop_map(|(before, run, after)| before + &run + &after)
+    }
+
+    /// A few lines of 2 to 6 KiB each, so each spans rope chunks: runs of ASCII broken by chars
+    /// that join the char before them (a combining accent, an emoji after a zero-width joiner),
+    /// by a prepended char that joins the one after it (U+0600 ARABIC NUMBER SIGN), and by a lone
+    /// `\r`, so chunk edges fall inside graphemes and between the chars that decide them.
+    fn long_lines() -> impl Strategy<Value = String> {
+        let pieces = &[
+            "a",
+            "xyz",
+            " ",
+            "e\u{301}",
+            "日本",
+            "🇩🇪",
+            "\u{600}x",
+            "🐻\u{200d}❄",
+            "\r",
+        ];
+        let line = (vec(select(&pieces[..]), 1..16), 2048..6144_usize).prop_map(|(line, bytes)| {
+            let line = line.concat();
+            line.repeat(bytes / line.len() + 1)
+        });
+        let break_ = select(&["\n", "\r\n"][..]);
+        (vec((line, break_), 1..4), vec(select(&pieces[..]), 0..4)).prop_map(|(lines, last)| {
+            let mut text: String = lines
+                .into_iter()
+                .flat_map(|(line, break_)| [line, break_.into()])
+                .collect();
+            text.push_str(&last.concat());
+            text
+        })
     }
 }

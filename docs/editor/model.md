@@ -115,9 +115,11 @@ cursor for `$` on the grapheme before it. Vim's motion kinds live in the Vim pre
   start from `offset`'s column, and keeps the goal that comes back. A line shorter than the goal
   gives the end of its content, and the goal `usize::MAX` keeps to line ends, as Vim does after
   `$`. A count past the first or the last line stops there.
-- Columns copy the line out of the rope and segment the copy: 17 ns per grapheme in a release
-  build, against 120 to 185 ns for stepping with `next_grapheme_boundary`, so 0.18 ms against
-  1.35 ms on a 10 KB line. A vertical move costs O(length) of the lines it reads.
+- Columns read the rope's chunks in place, without copying the line, and only up to the column
+  they need. A run of ASCII is one grapheme per byte, so it takes a byte scan instead of the
+  segmenter: about 1 ms per MB in a release build. Elsewhere unicode-segmentation splits each
+  chunk, at about 20 ns per grapheme. A vertical move costs O(column): from the line's start to
+  `offset` without a goal, and to the goal on the line it moves to.
 - Moving across soft-wrapped lines lands with the edit view.
 
 ### Word motions
