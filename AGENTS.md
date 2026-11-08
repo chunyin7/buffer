@@ -8,7 +8,7 @@ same commit that changes the behavior.
 
 As an agent when contributing to this project, keep contributions as atomic as possible unless asked and ALWAYS defer to the user regarding architectural decisions, finer implementation decisisions or even non-trivial abstraction designs, though you may raise any concerns to the user if warranted.
 
-Code should always prioritise human readability and understandability. We want to minimise unnecessary layers of abstraction whenever possible. For non-trivial code changes, always prefer going through an atomic human code review process, where after completing a turn you should walk the user through your change to be reviewed.
+Code should always prioritise human readability and understandability. We want to minimise unnecessary layers of abstraction whenever possible. After implementing your initial version for a code change, always review and consider ways it can be written to be more elegant and more readable. For non-trivial code changes, always prefer going through an atomic human code review process, where after completing a turn you should walk the user through your change to be reviewed.
 
 When adding tests, they should test non-trivial properties and should be added with intention.
 
