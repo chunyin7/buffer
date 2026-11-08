@@ -74,6 +74,9 @@ grapheme each, so a cursor never stops inside them.
   Indic conjuncts never reach back past one (UAX #29, GB9, GB9c, GB11). So `next_grapheme` and
   vertical moves read a run of flags once, where a lookup at each flag would read the run back to
   its start each time and cost O(run²).
+- Going backward, `prev_grapheme` takes every step with one cursor. Inside a run of regional
+  indicators, it reads the run back to its start on the first step and counts down from there, so
+  a count costs O(count) plus the run before `offset`, once.
 - crop's `graphemes` feature stays off: its `is_grapheme_boundary` walks chunks back from the end
   of the text, so its cost grows with the distance to the end.
 

@@ -177,30 +177,46 @@ impl Text {
     /// # Panics
     ///
     /// Panics if `offset` is past the end of the text or inside a char.
+    pub fn prev_grapheme_boundary(&self, offset: usize) -> usize {
+        self.step_back(offset, 1, 0)
+    }
+
+    /// Steps back `count` grapheme boundaries from `offset`, stopping at `start`, a grapheme
+    /// boundary at or before `offset`. One cursor takes every step: inside a run of regional
+    /// indicators, it reads back to the start of the run on the first step and counts down from
+    /// there, where a cursor for each step would read the run again each time, so a long count
+    /// through a run of flags would cost time in proportion to the run's length squared.
     #[expect(
         clippy::expect_used,
         reason = "the cursor asks for the previous chunk only after the start of the text"
     )]
-    pub fn prev_grapheme_boundary(&self, offset: usize) -> usize {
+    fn step_back(&self, offset: usize, count: usize, start: usize) -> usize {
         let mut chunks = self.rope.byte_slice(..offset).chunks();
         let mut chunk = chunks.next_back().unwrap_or_default();
         let mut chunk_start = offset - chunk.len();
         let mut cursor = GraphemeCursor::new(offset, self.len(), true);
-        loop {
-            match cursor.prev_boundary(chunk, chunk_start) {
-                Ok(boundary) => return boundary.unwrap_or(0),
-                Err(GraphemeIncomplete::PrevChunk) => {
-                    chunk = chunks
-                        .next_back()
-                        .expect("the text goes on before this chunk");
-                    chunk_start -= chunk.len();
-                }
-                Err(GraphemeIncomplete::PreContext(end)) => {
-                    provide_context(self.rope.byte_slice(..), &mut cursor, end)
-                }
-                Err(error) => unreachable!("grapheme cursor going backward: {error:?}"),
+        let mut target = offset;
+        for _ in 0..count {
+            if target <= start {
+                break;
             }
+            target = loop {
+                match cursor.prev_boundary(chunk, chunk_start) {
+                    Ok(boundary) => break boundary.unwrap_or(0),
+                    Err(GraphemeIncomplete::PrevChunk) => {
+                        chunk = chunks
+                            .next_back()
+                            .expect("the text goes on before this chunk");
+                        chunk_start -= chunk.len();
+                    }
+                    Err(GraphemeIncomplete::PreContext(end)) => {
+                        provide_context(self.rope.byte_slice(..), &mut cursor, end)
+                    }
+                    Err(error) => unreachable!("grapheme cursor going backward: {error:?}"),
+                }
+            };
         }
+        target
     }
 
     /// Moves `count` graphemes forward from `offset`, as `l` does. With [`LineEdges::Stop`] it
@@ -250,14 +266,7 @@ impl Text {
                 0
             }
         };
-        let mut target = offset;
-        for _ in 0..count {
-            if target <= start {
-                break;
-            }
-            target = self.prev_grapheme_boundary(target);
-        }
-        target
+        self.step_back(offset, count, start)
     }
 
     /// Where the first grapheme of `line` that isn't blank starts, as `^` finds it, or the end of
