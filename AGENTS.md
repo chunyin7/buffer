@@ -141,7 +141,10 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
     text that starts an empty line; a range end that an edit leaves inside a grapheme moves
     outward. `buffer-modal` restores this after every Normal-mode command and edit.
   - Words follow Unicode's word boundaries (UAX #29), with adjacent punctuation merged into one
-    stop, behind an interface another segmenter can implement.
+    stop, behind an interface another segmenter can implement. The segmenter also reports restart
+    points, where a line can be split and each piece segmented alone (both segmenters: where a
+    word starts after a blank). A word motion segments only a window around its start, at least
+    256 bytes, growing it until it finds a stop; a line without restart points is segmented whole.
   - Word motions stop at line edges, as Helix's do: a step ends at a line's edge at the latest,
     and one that starts there skips the break and any empty lines, so a word span never holds a
     line break. The Vim preset steps again where Vim's motions cross lines.

@@ -124,11 +124,13 @@ cursor for `$` on the grapheme before it. Vim's motion kinds live in the Vim pre
 
 ### Word motions
 
-Word motions take a segmenter, an `impl Words` or a `dyn Words`. It splits a line's content into
-segments, each a `WordKind::Word`, `Punctuation`, or `Whitespace`, and a motion stops where a
-segment that isn't blank starts or ends ([0032](../decisions/0032-motions-return-targets.md)).
-Another segmenter, such as Vim's char classes or a dictionary for CJK, changes the stops without
-changing the motions.
+Word motions take a segmenter, an `impl Words` or a `dyn Words`. It splits a piece of a line's
+content into segments, each a `WordKind::Word`, `Punctuation`, or `Whitespace`, and a motion
+stops where a segment that isn't blank starts or ends
+([0032](../decisions/0032-motions-return-targets.md)). Another segmenter, such as Vim's char
+classes or a dictionary for CJK, changes the stops without changing the motions. The segmenter
+also reports restart points, where a line can be split and each piece segmented alone with the
+same result ([0036](../decisions/0036-word-motions-segment-a-window.md)).
 
 - `UnicodeWords` follows Unicode's word boundaries (UAX #29), with adjacent punctuation merged, so
   `**`, `[[`, `...`, and `->` are one stop each; adjacent whitespace merges too. A segment with a
@@ -137,6 +139,10 @@ changing the motions.
   after a prepended char such as U+0600; the segment there stays whole, so a motion never stops
   inside a grapheme.
 - `BigWords` splits only at blank graphemes: WORDs, for `W`, `B`, and `E`.
+- Both restart where a word starts after a blank: a whitespace char that is a grapheme of its own,
+  then a letter or digit after a word boundary. `restarts_between` gets three chars, because a
+  prepended char joins a blank after it into its grapheme, and a combining mark after a blank
+  makes it punctuation.
 - A word span never crosses a line break, as in Helix
   ([0034](../decisions/0034-word-motions-stop-at-line-edges.md)). A step stops at the next stop of
   its kind on the line, or at the line's edge: its end going forward, its start going backward. A
@@ -156,9 +162,14 @@ changing the motions.
 - On the space in `foo bar`, Vim's `w` passes 3 and lands on `b`. Helix's passes 4, a stop, and
   selects `bar`. The Vim preset adapts where Vim's motions cross lines: it steps again at line
   edges, and it doesn't stop on empty lines.
-- Each step copies its line out of the rope and segments it, about 19 ns per byte in a release
-  build: a `w` in the middle of a 10 KB line takes 0.26 ms. Steps on the same line reuse the
-  segments.
+- A step segments a window around its start, copied out of the rope: from the last restart point
+  before the start to the first one at least 256 bytes after it going forward, mirrored going
+  backward. A window without a stop past the start grows toward the far edge by another piece of
+  at least 256 bytes until it reaches the line's edge; pieces meet at restart points, so nothing
+  is segmented twice. Steps on the same line reuse the window. A step costs about 0.5 µs plus
+  14 ns per byte it segments in a release build: 5 to 8 µs anywhere in a 1 MB line of prose. A
+  line without restart points, such as minified code or CJK prose without spaces, is segmented
+  whole: about 20 ms for 1 MB.
 
 ### Find
 

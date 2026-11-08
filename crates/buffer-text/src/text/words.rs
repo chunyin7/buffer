@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 use crate::Text;
@@ -13,14 +15,23 @@ pub enum WordKind {
     Whitespace,
 }
 
-/// Splits a line into segments for the word motions (ADR 0032). The motions stop where a segment
-/// that isn't blank starts or ends, so another segmenter, such as Vim's char classes or a
+/// Splits a line into segments for the word motions (ADR 0032, 0036). The motions stop where a
+/// segment that isn't blank starts or ends, so another segmenter, such as Vim's char classes or a
 /// dictionary for CJK, changes the stops without changing the motions.
 pub trait Words {
-    /// The segments of `line`, a line's content without its line break, in order and covering all
-    /// of it: where each ends, and its kind. An empty line has none. Each end is a grapheme
-    /// boundary, so a motion never stops inside a grapheme.
-    fn segments(&self, line: &str) -> Vec<(usize, WordKind)>;
+    /// The segments of `piece`, in order and covering all of it: where each ends, and its kind.
+    /// `piece` is part of a line's content, without its line break, that starts at the line's
+    /// start or at a restart point and ends at the line's end or at a restart point. An empty
+    /// piece has none. Each end is a grapheme boundary, so a motion never stops inside a
+    /// grapheme.
+    fn segments(&self, piece: &str) -> Vec<(usize, WordKind)>;
+
+    /// Whether there is a restart point between `before` and `after`, where `earlier`,
+    /// `before`, and `after` are three chars next to each other on a line: splitting a line at
+    /// its restart points and segmenting each piece gives the same segments as segmenting the
+    /// whole line. Word motions segment the piece of a line around the cursor, between two
+    /// restart points, so a long line costs no more than a short one, unless it has none.
+    fn restarts_between(&self, earlier: char, before: char, after: char) -> bool;
 }
 
 /// Unicode's word boundaries (UAX #29), with adjacent punctuation merged into one segment, so
@@ -47,6 +58,10 @@ impl Words for UnicodeWords {
         }
         segments
     }
+
+    fn restarts_between(&self, earlier: char, before: char, after: char) -> bool {
+        word_starts_after_blank(earlier, before, after)
+    }
 }
 
 /// WORDs, which Vim's `W`, `B`, and `E` move by: runs of graphemes that aren't blank, and runs of
@@ -70,6 +85,10 @@ impl Words for BigWords {
             }
         }
         segments
+    }
+
+    fn restarts_between(&self, earlier: char, before: char, after: char) -> bool {
+        word_starts_after_blank(earlier, before, after)
     }
 }
 
@@ -95,12 +114,38 @@ fn joined(a: WordKind, b: WordKind) -> WordKind {
     }
 }
 
-fn is_grapheme_boundary(line: &str, offset: usize) -> bool {
-    // The whole line is one chunk, so the cursor never asks for more.
+fn is_grapheme_boundary(text: &str, offset: usize) -> bool {
+    // The whole text is one chunk, so the cursor never asks for more.
     matches!(
-        GraphemeCursor::new(offset, line.len(), true).is_boundary(line, 0),
+        GraphemeCursor::new(offset, text.len(), true).is_boundary(text, 0),
         Ok(true)
     )
+}
+
+/// Whether a word starts between `before`, a blank grapheme of its own, and `after`, a letter or
+/// digit: a restart point for both segmenters. A blank ends the segments before it, and a letter
+/// or digit starts a word, which nothing before it joins. No word or grapheme rule decides a
+/// boundary by looking past a blank, back or ahead, so each side segments the same alone.
+///
+/// Graphemes can reach across the chars on either side: a prepended char such as U+0600 ARABIC
+/// NUMBER SIGN joins the blank after it, and a combining mark joins the char before it. Each
+/// would make the blank part of a segment that isn't blank, so the boundaries around `before`
+/// must be grapheme boundaries, and the one before `after` a word boundary.
+fn word_starts_after_blank(earlier: char, before: char, after: char) -> bool {
+    if !before.is_whitespace() || !after.is_alphanumeric() {
+        return false;
+    }
+    let mut buffer = [0; 12];
+    let mut len = 0;
+    for char in [earlier, before, after] {
+        len += char.encode_utf8(&mut buffer[len..]).len();
+    }
+    let (blank, word) = (earlier.len_utf8(), earlier.len_utf8() + before.len_utf8());
+    str::from_utf8(&buffer[..len]).is_ok_and(|chars| {
+        is_grapheme_boundary(chars, blank)
+            && is_grapheme_boundary(chars, word)
+            && chars.split_word_bound_indices().any(|(at, _)| at == word)
+    })
 }
 
 /// Which boundaries a word motion stops at.
@@ -110,6 +155,21 @@ enum Edge {
     Start,
     /// Where one ends: `e`, `ge`.
     End,
+}
+
+/// How many bytes a word motion segments past a step's start, going forward, or before it, going
+/// backward, at least: the window goes on to the next restart point. Segmenting costs about 14 ns
+/// a byte, and setting up a window about 0.5 µs, so 256 bytes take about 4 µs.
+const WINDOW: usize = 256;
+
+/// The segments of a piece of a line, from its start or a restart point to its end or a restart
+/// point, and the stops among them.
+struct Window {
+    range: Range<usize>,
+    /// Where each segment ends, and its kind.
+    segments: Vec<(usize, WordKind)>,
+    /// The boundaries inside `range` where a segment that isn't blank starts, or ends.
+    stops: Vec<usize>,
 }
 
 impl Text {
@@ -205,8 +265,9 @@ impl Text {
 
         let mut line = self.line_of(offset);
         let (mut position, mut from) = (offset, None);
-        // The stops of `stops_line`: steps on the same line reuse them.
-        let (mut stops, mut stops_line) = (Vec::new(), None);
+        // The piece of the line the last step segmented. A step on the same line starts at the
+        // last one's target, a stop inside it, so it reuses it.
+        let mut window: Option<Window> = None;
 
         for _ in 0..count {
             let mut start = position;
@@ -237,44 +298,166 @@ impl Text {
                 line = next;
                 (near, far) = edges(line);
                 start = near;
+                window = None;
             }
 
-            if stops_line != Some(line) {
-                stops = self.word_stops(line, words, edge);
-                stops_line = Some(line);
-            }
+            // The window holds the segments on both sides of the start, so that its stops tell
+            // whether the start is one, unless the start is the near edge.
+            let content = near.min(far)..near.max(far);
+            let window = window
+                .get_or_insert_with(|| self.word_window(words, &content, start, forward, edge));
+
+            // The first stop after the start, or the last one before it. A window without one
+            // grows toward the far edge until it reaches it.
+            let target = loop {
+                let stops = &window.stops;
+                let target = if forward {
+                    stops[stops.partition_point(|&stop| stop <= start)..].first()
+                } else {
+                    stops[..stops.partition_point(|&stop| stop < start)].last()
+                };
+                if target.is_some() || window.range.start == far || window.range.end == far {
+                    break target.copied();
+                }
+                self.grow_word_window(window, words, &content, forward, edge);
+            };
 
             // The span starts at the step's start if that is a stop or the near edge, and at the
             // cursor if it is inside a segment.
-            from = (start == near || stops.binary_search(&start).is_ok()).then_some(start);
-
-            // The first stop after the start, or the last one before it; else the far edge.
-            let target = if forward {
-                stops[stops.partition_point(|&stop| stop <= start)..].first()
-            } else {
-                stops[..stops.partition_point(|&stop| stop < start)].last()
-            };
-            position = target.copied().unwrap_or(far);
+            from = (start == near || window.stops.binary_search(&start).is_ok()).then_some(start);
+            position = target.unwrap_or(far);
         }
 
         (from, position)
     }
 
-    /// The stops on `line`: the boundaries inside it where a segment that isn't blank starts, or
-    /// ends.
-    fn word_stops(&self, line: usize, words: &(impl Words + ?Sized), edge: Edge) -> Vec<usize> {
-        let line_start = self.line_start(line);
-        let segments = words.segments(&self.to_string_in(line_start..self.line_end(line)));
-
-        segments
-            .windows(2)
-            .filter(|pair| match edge {
-                Edge::Start => pair[1].1 != WordKind::Whitespace,
-                Edge::End => pair[0].1 != WordKind::Whitespace,
-            })
-            .map(|pair| line_start + pair[0].0)
-            .collect()
+    /// The window a step from `start`, on a line with its content in `content`, segments first:
+    /// from the last restart point before `start` to the first one at least [`WINDOW`] bytes
+    /// after it going forward, and from the last one at least [`WINDOW`] bytes before it to the
+    /// first one after it going backward.
+    fn word_window(
+        &self,
+        words: &(impl Words + ?Sized),
+        content: &Range<usize>,
+        start: usize,
+        forward: bool,
+        edge: Edge,
+    ) -> Window {
+        let (behind, ahead) = if forward { (1, WINDOW) } else { (WINDOW, 1) };
+        let range = self.restart_behind(words, start, content.start, behind)
+            ..self.restart_ahead(words, start, content.end, ahead);
+        let segments = self.segments_in(words, range.clone());
+        let stops = stops(&segments, edge);
+        Window {
+            range,
+            segments,
+            stops,
+        }
     }
+
+    /// Adds the next piece of at least [`WINDOW`] bytes to `window`: after it going forward,
+    /// before it going backward.
+    fn grow_word_window(
+        &self,
+        window: &mut Window,
+        words: &(impl Words + ?Sized),
+        content: &Range<usize>,
+        forward: bool,
+        edge: Edge,
+    ) {
+        if forward {
+            let end = self.restart_ahead(words, window.range.end, content.end, WINDOW);
+            let after = self.segments_in(words, window.range.end..end);
+            window.segments.extend(after);
+            window.range.end = end;
+        } else {
+            let start = self.restart_behind(words, window.range.start, content.start, WINDOW);
+            let before = self.segments_in(words, start..window.range.start);
+            window.segments.splice(0..0, before);
+            window.range.start = start;
+        }
+        // The segments on both sides of where the pieces meet make a stop there.
+        window.stops = stops(&window.segments, edge);
+    }
+
+    /// The first restart point at least `min` bytes after `from`, or `to`, the end of the line's
+    /// content, if there is none. It reads the line from `from` on, so it misses a restart point
+    /// one char after `from`, which needs the char before `from`; a window can end at a later one.
+    fn restart_ahead(
+        &self,
+        words: &(impl Words + ?Sized),
+        from: usize,
+        to: usize,
+        min: usize,
+    ) -> usize {
+        let mut chars = self.rope.byte_slice(from..to).chars();
+        let (Some(mut earlier), Some(mut before)) = (chars.next(), chars.next()) else {
+            return to;
+        };
+        // Where `after` starts.
+        let mut at = from + earlier.len_utf8() + before.len_utf8();
+        for after in chars {
+            if at >= from + min && words.restarts_between(earlier, before, after) {
+                return at;
+            }
+            at += after.len_utf8();
+            (earlier, before) = (before, after);
+        }
+        to
+    }
+
+    /// The last restart point at least `min` bytes before `from`, or `to`, the start of the
+    /// line's content, if there is none.
+    fn restart_behind(
+        &self,
+        words: &(impl Words + ?Sized),
+        from: usize,
+        to: usize,
+        min: usize,
+    ) -> usize {
+        let mut chars = self.rope.byte_slice(to..from).chars().rev();
+        let (Some(mut after), Some(mut before)) = (chars.next(), chars.next()) else {
+            return to;
+        };
+        // Where `after` starts.
+        let mut at = from - after.len_utf8();
+        for earlier in chars {
+            if at + min <= from && words.restarts_between(earlier, before, after) {
+                return at;
+            }
+            at -= before.len_utf8();
+            (after, before) = (before, earlier);
+        }
+        to
+    }
+
+    /// The segments of the piece of a line in `range`, which starts at the line's start or a
+    /// restart point and ends at its end or a restart point: where each ends, and its kind.
+    fn segments_in(
+        &self,
+        words: &(impl Words + ?Sized),
+        range: Range<usize>,
+    ) -> Vec<(usize, WordKind)> {
+        let start = range.start;
+        let mut segments = words.segments(&self.to_string_in(range));
+        for (end, _) in &mut segments {
+            *end += start;
+        }
+        segments
+    }
+}
+
+/// The stops among `segments`: the boundaries between two where one that isn't blank starts, or
+/// ends.
+fn stops(segments: &[(usize, WordKind)], edge: Edge) -> Vec<usize> {
+    segments
+        .windows(2)
+        .filter(|pair| match edge {
+            Edge::Start => pair[1].1 != WordKind::Whitespace,
+            Edge::End => pair[0].1 != WordKind::Whitespace,
+        })
+        .map(|pair| pair[0].0)
+        .collect()
 }
 
 #[cfg(test)]
@@ -378,20 +561,28 @@ mod tests {
         "日", "本", "カタ", "e\u{301}", " \u{301}", "\u{600}", "🇩🇪", "👍🏽",
     ];
 
-    /// A line's content.
+    /// A line's content: pieces, each up to three times, so runs of blanks and of punctuation are
+    /// common.
     fn line() -> impl Strategy<Value = String> {
-        vec(select(PIECES), 0..24).prop_map(|pieces| pieces.concat())
+        let run = (select(PIECES), 1..4_usize).prop_map(|(piece, count)| piece.repeat(count));
+        vec(run, 0..24).prop_map(|runs| runs.concat())
     }
 
-    /// Lines of words, empty lines among them, and a grapheme boundary to move from.
+    /// Lines of words, empty lines among them, and a grapheme boundary to move from. Now and then
+    /// the lines are long runs of pieces, so a motion segments a window of each: a long run of
+    /// blanks, or a long word, makes it grow the window, and a line without blanks has no restart
+    /// points.
     fn text_and_offset() -> impl Strategy<Value = (String, usize)> {
         let piece = prop_oneof![4 => select(PIECES), 1 => select(&["\n", "\r\n", "\r"][..])];
-        vec(piece, 0..40)
-            .prop_map(|pieces| pieces.concat())
-            .prop_flat_map(|text| {
-                let offset = select(strategies::grapheme_boundaries(&text));
-                (Just(text), offset)
-            })
+        let short = vec(piece, 0..40).prop_map(|pieces| pieces.concat());
+        let run = (select(PIECES), 1..200_usize).prop_map(|(piece, count)| piece.repeat(count));
+        let long_line = vec(run, 1..12).prop_map(|runs| runs.concat());
+        let long = vec((long_line, select(&["\n", "\r\n"][..])), 1..4)
+            .prop_map(|lines| lines.into_iter().map(|(line, end)| line + end).collect());
+        prop_oneof![short, long].prop_flat_map(|text: String| {
+            let offset = select(strategies::grapheme_boundaries(&text));
+            (Just(text), offset)
+        })
     }
 
     /// What a word motion does on `string`, worked out from its lines and their segments.
@@ -464,6 +655,31 @@ mod tests {
             position = target.unwrap_or(far);
         }
         (from, position)
+    }
+
+    proptest! {
+        // The rule fails only on rare sequences, such as a prepended char before a run of
+        // blanks, so this cheap test runs more cases than the default 256.
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
+        #[test]
+        fn restart_points_split_a_line_into_its_segments(line in line(), big in any::<bool>()) {
+            let words: &dyn Words = if big { &BigWords } else { &UnicodeWords };
+            let chars: Vec<(usize, char)> = line.char_indices().collect();
+            let restarts = chars
+                .windows(3)
+                .filter(|three| words.restarts_between(three[0].1, three[1].1, three[2].1))
+                .map(|three| three[2].0);
+            let cuts: Vec<usize> = [0].into_iter().chain(restarts).chain([line.len()]).collect();
+            let pieces: Vec<(usize, WordKind)> = cuts
+                .windows(2)
+                .flat_map(|cut| {
+                    let segments = words.segments(&line[cut[0]..cut[1]]);
+                    segments.into_iter().map(move |(end, kind)| (cut[0] + end, kind))
+                })
+                .collect();
+            prop_assert_eq!(pieces, words.segments(&line));
+        }
     }
 
     proptest! {

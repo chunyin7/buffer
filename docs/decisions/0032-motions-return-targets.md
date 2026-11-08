@@ -1,6 +1,6 @@
 # 0032. Motions return targets; words follow Unicode
 
-- Status: Accepted
+- Status: Accepted; partly superseded by [0036](0036-word-motions-segment-a-window.md)
 - Date: 2026-11-01
 
 ## Context
