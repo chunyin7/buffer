@@ -73,3 +73,4 @@ Each rejected option with the reason. Omit the section if none were weighed.
 | [0035](0035-find-paragraph-and-bracket-motions.md) | Find, paragraph, and bracket motions |
 | [0036](0036-word-motions-segment-a-window.md) | Word motions segment a window between restart points |
 | [0038](0038-text-objects.md) | Text objects return spans; quotes pair as in Vim |
+| [0040](0040-registers-in-modal.md) | Registers live in buffer-modal; yank and paste in buffer-text |

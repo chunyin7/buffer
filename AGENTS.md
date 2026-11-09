@@ -165,6 +165,12 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
   - Quotes (`"`, `'`, `` ` ``, `‘’`) pair on the line from its start, as in Vim, in both presets;
     a `'` or `’` between letters or digits is an apostrophe. Any other char pairs with itself, as
     in Helix's `mi*`, the nearest on each side within the paragraph.
+- **Registers live in `buffer-modal`; yank and paste in `buffer-text`.** The store, names, and
+  each preset's rules (Vim's numbered shift, appending, types; Helix's per-range values; computed
+  registers) are the presets'. A value is one string per yanked range. `buffer-text` yanks a
+  selection's ranges and pastes one string per range (before, after, or in place) through the
+  `Document`; the preset maps a register's values onto the ranges. `+`/`*` go through a clipboard
+  trait in `buffer-modal`, implemented in ui or app.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.

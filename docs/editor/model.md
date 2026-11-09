@@ -10,11 +10,13 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0032](../decisions/0032-motions-return-targets.md) (motions and Normal-mode ranges),
 [0034](../decisions/0034-word-motions-stop-at-line-edges.md) (word motions at line edges),
 [0035](../decisions/0035-find-paragraph-and-bracket-motions.md) (find, paragraph, and bracket
-motions), and [0038](../decisions/0038-text-objects.md) (text objects).
+motions), [0038](../decisions/0038-text-objects.md) (text objects), and
+[0040](../decisions/0040-registers-in-modal.md) (yank and paste).
 
 Status: text with lines and grapheme boundaries, grapheme, line, word, find, paragraph, and
 bracket motions, text objects, change sets, selections with block cursors, transactions, and
-documents with undo history exist. Registers land later in M1.
+documents with undo history exist. Yank and paste land later in M1; registers live in
+`buffer-modal`.
 
 ## Text
 
