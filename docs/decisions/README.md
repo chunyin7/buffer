@@ -72,3 +72,4 @@ Each rejected option with the reason. Omit the section if none were weighed.
 | [0034](0034-word-motions-stop-at-line-edges.md) | Word motions stop at line edges, as Helix's do |
 | [0035](0035-find-paragraph-and-bracket-motions.md) | Find, paragraph, and bracket motions |
 | [0036](0036-word-motions-segment-a-window.md) | Word motions segment a window between restart points |
+| [0038](0038-text-objects.md) | Text objects return spans; quotes pair as in Vim |

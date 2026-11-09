@@ -1,6 +1,6 @@
 # 0035. Find, paragraph, and bracket motions
 
-- Status: Accepted
+- Status: Accepted; partly superseded by [0038](0038-text-objects.md)
 - Date: 2026-11-03
 
 ## Context

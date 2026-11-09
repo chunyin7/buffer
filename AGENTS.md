@@ -154,8 +154,17 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
   - Finds match a grapheme by its first char, on the line (Vim) or across lines (Helix), and fail
     when a count overshoots. Paragraphs are runs of lines that aren't blank (empty or all
     whitespace): Vim's `{`/`}` stop on the blank line past one, Helix's `[p`/`]p` on its first
-    line. `%` matches `()`, `[]`, `{}`, and CJK brackets, counting nesting across lines. No scan
-    limits, and none of these motions knows Markdown.
+    line. `%` matches `()`, `[]`, `{}`, `“”`, and CJK brackets, counting nesting across lines. No
+    scan limits, and none of these motions knows Markdown.
+- **Text objects return spans.** `Text` methods return `Option<Range<usize>>`, `Inside` or
+  `Around`; the presets build ranges and keep Vim's linewise objects and fallbacks (its `i(`
+  outside a pair takes the next one). No escapes, until the parser can tell code apart.
+  - Words, WORDs, paragraphs, and sentences: `Around` adds the blanks after, or before if none
+    follow. Sentences follow UAX #29 within a paragraph, its line breaks read as spaces.
+  - Brackets: the pairs of `%`, the count-th enclosing a span, so a repeat grows outward.
+  - Quotes (`"`, `'`, `` ` ``, `‘’`) pair on the line from its start, as in Vim, in both presets;
+    a `'` or `’` between letters or digits is an apostrophe. Any other char pairs with itself, as
+    in Helix's `mi*`, the nearest on each side within the paragraph.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.
