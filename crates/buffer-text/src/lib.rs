@@ -14,4 +14,4 @@ mod transaction;
 pub use change::{Assoc, ChangeSet, InvalidChange};
 pub use document::Document;
 pub use selection::{Range, Selection};
-pub use text::{BigWords, LineEdges, Text, UnicodeWords, WordKind, Words, is_bracket};
+pub use text::{BigWords, Extent, LineEdges, Text, UnicodeWords, WordKind, Words, is_bracket};

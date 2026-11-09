@@ -6,11 +6,15 @@ use crop::{Rope, RopeSlice};
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete, UnicodeSegmentation};
 
 mod brackets;
+mod delimiters;
 mod find;
+mod objects;
 mod paragraphs;
+mod sentences;
 mod words;
 
 pub use brackets::is_bracket;
+pub use objects::Extent;
 pub use words::{BigWords, UnicodeWords, WordKind, Words};
 
 /// UTF-8 text in a rope, addressed by byte offsets.

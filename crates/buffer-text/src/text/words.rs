@@ -1,7 +1,9 @@
+use std::iter;
 use std::ops::Range;
 
 use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
+use super::objects::{Extent, object_span};
 use crate::Text;
 
 /// What a word segment holds.
@@ -119,7 +121,7 @@ fn joined(a: WordKind, b: WordKind) -> WordKind {
     }
 }
 
-fn is_grapheme_boundary(text: &str, offset: usize) -> bool {
+pub(super) fn is_grapheme_boundary(text: &str, offset: usize) -> bool {
     // The whole text is one chunk, so the cursor never asks for more.
     matches!(
         GraphemeCursor::new(offset, text.len(), true).is_boundary(text, 0),
@@ -251,6 +253,79 @@ impl Text {
         words: &(impl Words + ?Sized),
     ) -> (Option<usize>, usize) {
         self.word_motion(offset, count, words, false, Edge::End)
+    }
+
+    /// The word object at `offset`, as Vim's `iw` and `aw`, or `iW` and `aW` with [`BigWords`],
+    /// and Helix's `miw` and `maw` select it (ADR 0038). `Inside` is the segment at `offset`: a
+    /// word, a run of punctuation, or a run of blanks. `Around` adds the blanks after it, or
+    /// before it if none follow; from blanks, it takes them and the segment after. A count takes
+    /// that many segments: `Inside` counts runs of blanks, `Around` doesn't. No span crosses a
+    /// line break, so a count that overshoots stops at the line's end.
+    ///
+    /// Returns `None` where no segment is at `offset`: at the end of a line's content, on its
+    /// line break, or with a count of 0.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset` is past the end of the text or inside a char.
+    pub fn word_object(
+        &self,
+        offset: usize,
+        count: usize,
+        extent: Extent,
+        words: &(impl Words + ?Sized),
+    ) -> Option<Range<usize>> {
+        let line = self.line_of(offset);
+        let content = self.line_start(line)..self.line_end(line);
+        if offset >= content.end {
+            return None;
+        }
+
+        // A window as a motion's (ADR 0036): from the last restart point before `offset` to the
+        // first one at least `WINDOW` bytes after it, growing as the units run on.
+        let start = self.restart_behind(words, offset, content.start, 1);
+        let mut end = self.restart_ahead(words, offset, content.end, WINDOW);
+        let mut segments = self.segments_in(words, start..end);
+        let at = segments.partition_point(|&(segment_end, _)| segment_end <= offset);
+        // Where the segment at `offset` starts, and the one before it, if the window holds it:
+        // where it starts if it is blank. A window that starts at a restart point, after a blank,
+        // doesn't hold it.
+        let (first, before) = match at.checked_sub(1) {
+            Some(before) => (
+                segments[before].0,
+                Some(blank_start(&segments, start, before)),
+            ),
+            None => (start, None),
+        };
+        let blanks_before = || match before {
+            Some(blank) => blank,
+            None if first > content.start => {
+                let start = self.restart_behind(words, first, content.start, 1);
+                let segments = self.segments_in(words, start..first);
+                blank_start(&segments, start, segments.len().checked_sub(1)?)
+            }
+            None => None,
+        };
+
+        segments.drain(..at);
+        let mut segments = segments.into_iter();
+        let mut unit_start = first;
+        let units = iter::from_fn(|| {
+            let (segment_end, kind) = match segments.next() {
+                Some(segment) => segment,
+                None if end < content.end => {
+                    let next = self.restart_ahead(words, end, content.end, WINDOW);
+                    segments = self.segments_in(words, end..next).into_iter();
+                    end = next;
+                    segments.next()?
+                }
+                None => return None,
+            };
+            let unit = unit_start..segment_end;
+            unit_start = segment_end;
+            Some((unit, kind == WordKind::Whitespace))
+        });
+        object_span(units, blanks_before, count, extent)
     }
 
     fn word_motion(
@@ -465,6 +540,15 @@ fn stops(segments: &[(usize, WordKind)], edge: Edge) -> Vec<usize> {
         .collect()
 }
 
+/// Where `segments[index]`, in a piece of a line that starts at `start`, starts if it is blank.
+fn blank_start(segments: &[(usize, WordKind)], start: usize, index: usize) -> Option<usize> {
+    (segments[index].1 == WordKind::Whitespace).then(|| {
+        index
+            .checked_sub(1)
+            .map_or(start, |before| segments[before].0)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::collection::vec;
@@ -473,7 +557,9 @@ mod tests {
     use unicode_segmentation::UnicodeSegmentation;
 
     use super::*;
+    use crate::Extent::{Around, Inside};
     use crate::strategies;
+    use crate::text::objects;
 
     /// `line`'s segments: words in brackets, punctuation in angle brackets, blanks as `_`.
     fn render(words: &impl Words, line: &str) -> String {
@@ -559,6 +645,33 @@ mod tests {
         assert_eq!(text.prev_word_start(9, 1, words), (Some(7), 4));
     }
 
+    #[test]
+    fn word_objects_take_segments_and_the_blanks_beside_them() {
+        // `foo` 0..3, `bar` 4..7, `.` 7..8, blanks 8..10, `baz` 10..13, a line break, `qux`.
+        let text = Text::from("foo bar.  baz\nqux");
+        let object = |offset, count, extent| text.word_object(offset, count, extent, &UnicodeWords);
+        // `Inside` is the segment at the offset; a count counts runs of blanks too.
+        assert_eq!(object(5, 1, Inside), Some(4..7));
+        assert_eq!(object(7, 1, Inside), Some(7..8));
+        assert_eq!(object(9, 1, Inside), Some(8..10));
+        assert_eq!(object(4, 3, Inside), Some(4..10));
+        // `Around` adds the blanks after `foo`. `.` follows `bar`, and nothing follows `baz`, so
+        // they take the blanks before them.
+        assert_eq!(object(0, 1, Around), Some(0..4));
+        assert_eq!(object(4, 1, Around), Some(3..7));
+        assert_eq!(object(10, 1, Around), Some(8..13));
+        // From blanks, it takes them and the segment after.
+        assert_eq!(object(3, 1, Around), Some(3..7));
+        // A count doesn't count runs of blanks: `foo bar`, with no blanks after or before it,
+        // then `foo bar.` and the blanks after it.
+        assert_eq!(object(0, 2, Around), Some(0..7));
+        assert_eq!(object(0, 3, Around), Some(0..10));
+        // A count stops at the line's end; on the line break there is no segment.
+        assert_eq!(object(10, 5, Inside), Some(10..13));
+        assert_eq!(object(13, 1, Inside), None);
+        assert_eq!(object(0, 0, Inside), None);
+    }
+
     /// Pieces of prose and Markdown: words, numbers, punctuation that UAX #29 keeps in a word or
     /// splits off, blanks, CJK, emoji, a space with a combining accent, and a prepended char.
     const PIECES: &[&str] = &[
@@ -590,14 +703,8 @@ mod tests {
         })
     }
 
-    /// What a word motion does on `string`, worked out from its lines and their segments.
-    fn model(
-        string: &str,
-        (offset, count): (usize, usize),
-        words: &dyn Words,
-        (forward, starts): (bool, bool),
-    ) -> (Option<usize>, usize) {
-        // Each line: where it starts, and where its content ends, before a `\n` or `\r\n`.
+    /// `string`'s lines: where each starts, and where its content ends, before a `\n` or `\r\n`.
+    fn lines(string: &str) -> Vec<(usize, usize)> {
         let pieces: Vec<&str> = string.split('\n').collect();
         let mut lines = Vec::new();
         let mut start = 0;
@@ -610,6 +717,17 @@ mod tests {
             lines.push((start, start + content.len()));
             start += piece.len() + 1;
         }
+        lines
+    }
+
+    /// What a word motion does on `string`, worked out from its lines and their segments.
+    fn model(
+        string: &str,
+        (offset, count): (usize, usize),
+        words: &dyn Words,
+        (forward, starts): (bool, bool),
+    ) -> (Option<usize>, usize) {
+        let lines = lines(string);
         // The boundaries inside a line where a segment that isn't blank starts, or ends.
         let stops = |line: usize| -> Vec<usize> {
             let (line_start, line_end) = lines[line];
@@ -660,6 +778,32 @@ mod tests {
             position = target.unwrap_or(far);
         }
         (from, position)
+    }
+
+    /// What `word_object` returns on `string`, worked out from all the segments of the offset's
+    /// line.
+    fn object_model(
+        string: &str,
+        (offset, count): (usize, usize),
+        extent: Extent,
+        words: &dyn Words,
+    ) -> Option<Range<usize>> {
+        let (line_start, line_end) = lines(string)
+            .into_iter()
+            .rfind(|&(start, _)| start <= offset)
+            .unwrap();
+        let mut start = line_start;
+        let units: Vec<(Range<usize>, bool)> = words
+            .segments(&string[line_start..line_end])
+            .into_iter()
+            .map(|(end, kind)| {
+                let unit = start..line_start + end;
+                start = unit.end;
+                (unit, kind == WordKind::Whitespace)
+            })
+            .collect();
+        let at = units.iter().position(|(unit, _)| unit.end > offset)?;
+        objects::model(&units, at, count, extent)
     }
 
     proptest! {
@@ -750,6 +894,22 @@ mod tests {
                 _ => (text.prev_word_end(offset, count, words), (false, false)),
             };
             prop_assert_eq!(moved, model(&string, (offset, count), words, kind));
+        }
+
+        #[test]
+        fn word_objects_match_a_model_of_the_line(
+            (string, offset) in text_and_offset(),
+            count in 0..5_usize,
+            around in any::<bool>(),
+            big in any::<bool>(),
+        ) {
+            let text = Text::from(string.as_str());
+            let words: &dyn Words = if big { &BigWords } else { &UnicodeWords };
+            let extent = if around { Around } else { Inside };
+            prop_assert_eq!(
+                text.word_object(offset, count, extent, words),
+                object_model(&string, (offset, count), extent, words)
+            );
         }
     }
 }

@@ -8,13 +8,13 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0029](../decisions/0029-undo-insert-sessions.md) (undo steps),
 [0031](../decisions/0031-document-owns-history.md) (documents and history),
 [0032](../decisions/0032-motions-return-targets.md) (motions and Normal-mode ranges),
-[0034](../decisions/0034-word-motions-stop-at-line-edges.md) (word motions at line edges), and
+[0034](../decisions/0034-word-motions-stop-at-line-edges.md) (word motions at line edges),
 [0035](../decisions/0035-find-paragraph-and-bracket-motions.md) (find, paragraph, and bracket
-motions).
+motions), and [0038](../decisions/0038-text-objects.md) (text objects).
 
 Status: text with lines and grapheme boundaries, grapheme, line, word, find, paragraph, and
-bracket motions, change sets, selections with block cursors, transactions, and documents with
-undo history exist. Text objects and registers land later in M1.
+bracket motions, text objects, change sets, selections with block cursors, transactions, and
+documents with undo history exist. Registers land later in M1.
 
 ## Text
 
@@ -257,10 +257,10 @@ them.
 `matching_bracket(offset)` goes from a bracket to its partner, as Vim's `%` and Helix's `mm` do
 ([0035](../decisions/0035-find-paragraph-and-bracket-motions.md)).
 
-- The pairs are `()`, `[]`, `{}`, and the full-width and CJK brackets `（）`, `［］`, `｛｝`, `「」`,
-  `『』`, `【】`, `〈〉`, `《》`, and `〔〕`, but not `<>` or curly quotes: in prose, `>` also starts
-  quotes and arrows, and `’` is also an apostrophe. `is_bracket(ch)` tells whether a char is one
-  of them.
+- The pairs are `()`, `[]`, `{}`, `“”`, and the full-width and CJK brackets `（）`, `［］`, `｛｝`,
+  `「」`, `『』`, `【】`, `〈〉`, `《》`, and `〔〕` ([0038](../decisions/0038-text-objects.md)), but
+  not `<>` or `‘’`: in prose, `>` also starts quotes and arrows, and `’` is also an apostrophe.
+  `is_bracket(ch)` tells whether a char is one of them.
 - A bracket is a grapheme whose first char is one, as in a find: a `(` with a combining accent is
   a bracket, and a `(` after a prepended char such as U+0600 is inside that char's grapheme, so it
   is none.
@@ -287,6 +287,64 @@ them.
   Markdown with links, 1.2 to 1.3 ms across CJK text, and 1.1 to 1.3 ms across JSON, where 13% of
   the chars are braces. A bracket with no partner takes 0.6 ms across 1 MB of prose, a pair on one
   line under 1 µs, and a scan across 1 MB of nothing but `()` 4 to 5 ms.
+
+## Text objects
+
+Text objects are `Text` methods too ([0038](../decisions/0038-text-objects.md)). Each returns a
+span on grapheme boundaries, or `None` where there is no such object, and takes an `Extent`:
+`Inside` or `Around`. The presets build ranges from the span and keep Vim's linewise objects and
+its fallbacks.
+
+| Method | Object | Vim | Helix |
+|---|---|---|---|
+| `word_object(offset, count, extent, words)` | a word, a run of punctuation, or a run of blanks | `iw`, `aw`, `iW`, `aW` | `miw`, `maw` |
+| `sentence_object(offset, count, extent)` | a sentence, or the blanks between two | `is`, `as` | |
+| `paragraph_object(offset, count, extent)` | a paragraph, or a run of blank lines | `ip`, `ap` | `mip`, `map` |
+| `enclosing_bracket_object(span, count, kind, extent)` | the `count`-th pair of brackets around `span` | `i(`, `a(`, … | `mi(`, `ma(`, `mim`, `mam` |
+| `quote_object(offset, quote, extent)` | the string `offset` is in | `i"`, `a'`, … | `mi"`, `ma'`, … |
+| `pair_object(offset, count, delimiter, extent)` | the `count`-th `delimiter` on each side | | `mi*`, `ma*` |
+
+- Words, sentences, and paragraphs split the text into units, blank or not: segments of a line,
+  sentences and the blanks between them, runs of lines. `Inside` takes `count` units from the one
+  at `offset`, of either kind. `Around` takes `count` that aren't blank and the blank ones between
+  them, and adds the blank unit after the last, or the one before the first if none follows; from
+  a blank unit, it takes that and the next `count` that aren't. A count that overshoots stops at
+  the last unit: the line's end for words, the paragraph's for sentences, the text's for
+  paragraphs. A count of 0 gives `None`.
+- A word object never crosses a line break, so there is none at a line's end or on its break. It
+  segments a window as a word motion does and grows it as a count runs on: about 10 µs in the
+  middle of a 1 MB line of prose, in a release build.
+- A paragraph object's run goes from its first line's start to the start of the line after it, so
+  it holds its line breaks. The empty line after a final line break, right after a paragraph, is
+  no run: `ap` on a note's last paragraph takes the blank lines before it, as in Vim, and there is
+  no object on that line. A paragraph object walks the lines of its runs, and the blank lines
+  before them for `Around`: about 1 µs for a short paragraph, 0.9 ms for a paragraph of 1 MB.
+- Sentences follow Unicode's sentence boundaries (UAX #29) inside the paragraph at `offset`, which
+  the segmenter gets with each line break as spaces of the same length, so a hard-wrapped sentence
+  stays whole. A sentence leaves out the blank graphemes around it, a boundary inside a grapheme
+  moves to the grapheme's end, and there is none on a blank line. The paragraph is copied and
+  segmented whole: 0.2 ms for 10 KB, 2 ms for 100 KB.
+- A bracket object takes a span, so that a repeat grows the selection. The brackets after a pivot
+  that close a pair it is in pair up with those before it that open one, level by level, as `%`
+  pairs them: the pivot is the span's start, or the end of the opening bracket that starts it, so
+  a bracket at the span's edge belongs to the pair it opens or closes. A pair that closes inside
+  the span is no pair around it, and pairs of any kind (`kind` `None`) come in the order they
+  close. A pair whose object, its inside for `Inside` or the whole pair for `Around`, lies within
+  the span is skipped, unless the span is one grapheme or none: a cursor. So `mim` from the `x` of
+  `[((xy))]` gives `xy`, then `(xy)`, then `((xy))`, and `mam` gives `(xy)`, then `((xy))`, then
+  all of it. An inside of one grapheme can't grow, as in Vim: a repeat reads it as a cursor.
+- A bracket object scans out from the pivot both ways as `%` does: 0.5 ms for a pair of one kind
+  1 MB wide, 1.1 ms for any kind, about 2 µs for a pair around the cursor. `matching_bracket`
+  keeps a scan of its own, since its `[open, close]` pattern runs faster than a predicate.
+- Quotes are `"`, `'`, `` ` ``, and `‘’`; `‘` and `’` both pick `‘’`. They pair on `offset`'s
+  line from its start, the first with the next, and a `'` or `’` with a letter or digit on both
+  sides is an apostrophe. `don't say 'hi'` pairs the quotes around `hi`. Vim's fallback to the
+  next string on the line, and the blanks its `a"` adds, are the Vim preset's. A quote object
+  copies the line and reads it up to the string: 0.6 ms for a string at the end of a 1 MB line.
+- A pair of chars is the `count`-th `delimiter` before `offset` and the `count`-th after it,
+  found as a find finds them but inside the paragraph at `offset`. There is none if `offset` is
+  on a delimiter or either side runs out. Finding the paragraph walks it whole: 0.13 ms for 100
+  KB.
 
 ## Change sets
 

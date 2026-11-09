@@ -1,3 +1,7 @@
+use std::iter;
+use std::ops::Range;
+
+use super::objects::{Extent, object_span};
 use crate::Text;
 
 impl Text {
@@ -67,6 +71,70 @@ impl Text {
             target = self.line_start(line + 1);
         }
         target
+    }
+
+    /// The paragraph object at `offset`, as Vim's `ip` and `ap` and Helix's `mip` and `map`
+    /// select it (ADR 0038). `Inside` is the run of lines `offset` is on, a paragraph or blank
+    /// lines, from its first line's start to the start of the line after it. `Around` adds the
+    /// blank lines after it, or before it if none follow; from blank lines, it takes them and the
+    /// paragraph after. A count takes that many runs: `Inside` counts runs of blank lines,
+    /// `Around` doesn't. A count that overshoots stops at the end of the text; a count of 0
+    /// returns `None`. The empty line after a final line break, right after a paragraph, is no
+    /// run: the paragraph before it has no blank lines after it, and there is no object on it.
+    /// Vim's linewise objects are the Vim preset's.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset` is past the end of the text or inside a char.
+    pub fn paragraph_object(
+        &self,
+        offset: usize,
+        count: usize,
+        extent: Extent,
+    ) -> Option<Range<usize>> {
+        let line = self.line_of(offset);
+        let (first, _) = self.run_start(line);
+        let mut lines = self.walk_lines(line, true).peekable();
+        let mut start = first;
+        let units = iter::from_fn(|| {
+            let &(_, blank) = lines.peek()?;
+            while lines.next_if(|&(_, is_blank)| is_blank == blank).is_some() {}
+            let end = lines.peek().map_or(self.line_count(), |&(line, _)| line);
+            let unit = self.line_start(start)..self.line_start(end);
+            start = end;
+            // Only the empty line after a final line break makes an empty run, the last one.
+            (!unit.is_empty()).then_some((unit, blank))
+        });
+        let blanks_before = || {
+            let (start, blank) = self.run_start(first.checked_sub(1)?);
+            blank.then(|| self.line_start(start))
+        };
+        object_span(units, blanks_before, count, extent)
+    }
+
+    /// The lines of the paragraph `line` is on, or `None` if `line` is blank. Sentence objects and
+    /// pairs of chars stay inside it (ADR 0038).
+    pub(super) fn paragraph_lines(&self, line: usize) -> Option<Range<usize>> {
+        let (first, blank) = self.run_start(line);
+        if blank {
+            return None;
+        }
+        let end = self
+            .walk_lines(line, true)
+            .find(|&(_, blank)| blank)
+            .map_or(self.line_count(), |(line, _)| line);
+        Some(first..end)
+    }
+
+    /// The first line of the run `line` is in, of blank lines or of lines that aren't, and whether
+    /// they are blank.
+    fn run_start(&self, line: usize) -> (usize, bool) {
+        let mut lines = self.walk_lines(line, false).peekable();
+        let blank = lines.peek().is_some_and(|&(_, blank)| blank);
+        let start = lines
+            .find(|&(_, is_blank)| is_blank != blank)
+            .map_or(0, |(line, _)| line + 1);
+        (start, blank)
     }
 
     /// Moves `count` steps from `offset`, forward or back. Each step walks past any blank lines,
@@ -141,7 +209,9 @@ mod tests {
     use proptest::sample::select;
 
     use super::*;
+    use crate::Extent::{Around, Inside};
     use crate::strategies;
+    use crate::text::objects;
 
     /// Paragraphs `a b`, `c`, and `d`. Lines 0 `a`, 1 `b`, 2 empty, 3 two spaces, 4 `c`, 5 empty,
     /// and 6 `d` start at 0, 2, 4, 5, 8, 10, and 11; the text ends at 12.
@@ -205,6 +275,34 @@ mod tests {
         assert_eq!(text.next_blank_line(7, 1), 8);
     }
 
+    #[test]
+    fn paragraph_objects_take_runs_of_lines() {
+        // `a b` 0..4, blank lines 4..8, `c` 8..10, an empty line 10..11, `d` 11..12.
+        let text = Text::from(PARAGRAPHS);
+        // `Inside` is the run of lines at the offset, of either kind; a count counts both.
+        assert_eq!(text.paragraph_object(1, 1, Inside), Some(0..4));
+        assert_eq!(text.paragraph_object(6, 1, Inside), Some(4..8));
+        assert_eq!(text.paragraph_object(0, 2, Inside), Some(0..8));
+        assert_eq!(text.paragraph_object(0, 9, Inside), Some(0..12));
+        // `Around` adds the blank lines after, or before `d`, the last paragraph.
+        assert_eq!(text.paragraph_object(0, 1, Around), Some(0..8));
+        assert_eq!(text.paragraph_object(11, 1, Around), Some(10..12));
+        // The empty line after a final line break isn't blank lines after `b`, and holds no
+        // object. After blank lines, it is one of them.
+        let text = Text::from("a\n\nb\n");
+        assert_eq!(text.paragraph_object(3, 1, Around), Some(2..5));
+        assert_eq!(text.paragraph_object(5, 1, Inside), None);
+        assert_eq!(
+            Text::from("a\n\n").paragraph_object(3, 1, Inside),
+            Some(2..3)
+        );
+        let text = Text::from(PARAGRAPHS);
+        // From blank lines, it takes them and the paragraph after; a count skips blank runs.
+        assert_eq!(text.paragraph_object(4, 1, Around), Some(4..10));
+        assert_eq!(text.paragraph_object(0, 2, Around), Some(0..11));
+        assert_eq!(text.paragraph_object(0, 0, Inside), None);
+    }
+
     /// Pieces of lines: Unicode whitespace, a lone `\r`, which breaks no line, and chars that
     /// aren't blank, one of them a combining accent on a space.
     const PIECES: &[&str] = &[" ", "\t", "\u{a0}", "\u{3000}", "\r", "a", "日", " \u{301}"];
@@ -231,16 +329,22 @@ mod tests {
         })
     }
 
-    /// What a paragraph motion does on `string`, worked out from where its lines start and
-    /// whether each is blank: motion 0 is `}`, 1 `{`, 2 `]p`, and 3 `[p`.
-    fn model(string: &str, (offset, count): (usize, usize), motion: usize) -> usize {
-        // A `\r` before a `\n` is whitespace, so it doesn't change whether its line is blank.
+    /// `string`'s lines: where each starts, and whether it is blank. A `\r` before a `\n` is
+    /// whitespace, so it doesn't change whether its line is blank.
+    fn lines(string: &str) -> Vec<(usize, bool)> {
         let mut lines = Vec::new();
         let mut start = 0;
         for piece in string.split('\n') {
             lines.push((start, piece.chars().all(char::is_whitespace)));
             start += piece.len() + 1;
         }
+        lines
+    }
+
+    /// What a paragraph motion does on `string`, worked out from where its lines start and
+    /// whether each is blank: motion 0 is `}`, 1 `{`, 2 `]p`, and 3 `[p`.
+    fn model(string: &str, (offset, count): (usize, usize), motion: usize) -> usize {
+        let lines = lines(string);
         let line = lines
             .iter()
             .rposition(|&(start, _)| start <= offset)
@@ -283,6 +387,38 @@ mod tests {
         }
     }
 
+    /// What `paragraph_object` returns on `string`, worked out from all its runs of lines.
+    fn object_model(
+        string: &str,
+        (offset, count): (usize, usize),
+        extent: Extent,
+    ) -> Option<Range<usize>> {
+        let lines = lines(string);
+        let mut units: Vec<(Range<usize>, bool)> = Vec::new();
+        for (index, &(start, blank)) in lines.iter().enumerate() {
+            let end = lines.get(index + 1).map_or(string.len(), |&(next, _)| next);
+            match units.last_mut() {
+                Some((unit, last)) if *last == blank => unit.end = end,
+                _ => units.push((start..end, blank)),
+            }
+        }
+        // The empty line after a final line break, right after a paragraph, is no run.
+        units.retain(|(unit, _)| !unit.is_empty());
+        // An offset inside a `\r\n` is on the line the break ends.
+        let line_start = lines
+            .iter()
+            .rfind(|&&(start, _)| start <= offset)
+            .unwrap()
+            .0;
+        // After blank lines, the empty line after a final line break is in their run.
+        let at = match units.iter().position(|(unit, _)| unit.end > line_start) {
+            Some(at) => at,
+            None if units.last()?.1 => units.len() - 1,
+            None => return None,
+        };
+        objects::model(&units, at, count, extent)
+    }
+
     proptest! {
         #[test]
         fn paragraph_motions_match_a_model_of_the_lines(
@@ -299,6 +435,20 @@ mod tests {
                 _ => text.prev_paragraph_start(offset, count),
             };
             prop_assert_eq!(moved, model(&string, (offset, count), motion));
+        }
+
+        #[test]
+        fn paragraph_objects_match_a_model_of_the_lines(
+            (string, offset) in lines_and_offset(),
+            count in prop_oneof![Just(1), 0..6_usize],
+            around in any::<bool>(),
+        ) {
+            let text = Text::from(string.as_str());
+            let extent = if around { Around } else { Inside };
+            prop_assert_eq!(
+                text.paragraph_object(offset, count, extent),
+                object_model(&string, (offset, count), extent)
+            );
         }
     }
 }

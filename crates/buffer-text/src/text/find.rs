@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::{LineEdges, Text};
 
 impl Text {
@@ -52,10 +54,10 @@ impl Text {
         matches: impl Fn(char) -> bool,
     ) -> Option<usize> {
         // The line's content with `Stop`, so an offset inside a `\r\n` doesn't find the `\r`.
-        let (start, end) = match edges {
+        let bounds = match edges {
             LineEdges::Stop => {
                 let line = self.line_of(offset);
-                (self.line_start(line), self.line_end(line))
+                self.line_start(line)..self.line_end(line)
             }
             LineEdges::Cross => {
                 // In the other branch, `line_of` checks the offset.
@@ -63,16 +65,33 @@ impl Text {
                     self.is_char_boundary(offset),
                     "offset {offset} is inside a char"
                 );
-                (0, self.len())
+                0..self.len()
             }
         };
+        self.find_in(bounds, offset, count, forward, matches)
+    }
+
+    /// Finds the `count`-th grapheme in `bounds` after `offset`, or before it, whose first char
+    /// `matches`; see [`find_next`](Self::find_next). `offset` is in `bounds` or right past it,
+    /// inside the `\r\n` that ends them.
+    pub(super) fn find_in(
+        &self,
+        bounds: Range<usize>,
+        offset: usize,
+        count: usize,
+        forward: bool,
+        matches: impl Fn(char) -> bool,
+    ) -> Option<usize> {
         if count == 0 {
             return Some(offset);
         }
 
-        // `offset` can be past `end` when it is inside a `\r\n` and `end` is the line's end.
-        let from = offset.min(end);
-        let range = if forward { from..end } else { start..from };
+        let from = offset.min(bounds.end);
+        let range = if forward {
+            from..bounds.end
+        } else {
+            bounds.start..from
+        };
         // In each chunk, the chars that match and start a grapheme, other than the one at `from`.
         // Only a char that matches pays for the grapheme check, which its chunk usually answers.
         let mut found = self.chunks_in(range).flat_map(|(chunk_start, chunk)| {
