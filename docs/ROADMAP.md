@@ -74,9 +74,9 @@ Docs: `README.md`, `CONTRIBUTING.md`, `docs/architecture.md`, `docs/performance.
 ### M1: Text core and modal editing
 
 - `buffer-text`: rope wrapper, transactions, selections, revision-tree history, grapheme-aware
-  motions, text objects, yank and paste, counts, repeat.
-- `buffer-modal`: command registry, keymap engine, registers, Vim and Helix presets, `:` command
-  line, pending-key hints.
+  motions, text objects, yank and paste.
+- `buffer-modal`: command registry, keymap engine, counts, repeat, registers, Vim and Helix
+  presets, `:` command line, pending-key hints.
 - Edit view: monospace, virtualized, Markdown syntax coloring, IME, clipboard (system, plus
   PRIMARY on Linux), in-note search.
 - Single-file open and save: atomic writes, byte-identical round-trips.

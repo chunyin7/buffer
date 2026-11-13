@@ -190,6 +190,9 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
   - A key sequence is bound to a command or starts longer ones, never both, so dispatch never
     waits on a timer (no Vim `timeoutlen`). A later binding replaces what its keys overlap; that
     is how config overrides presets.
+  - Counts and repeat are `buffer-modal`'s: dispatch reads a count and the preset's commands
+    decide what it means; `buffer-text` only takes counts as arguments. How repeat records and
+    replays is decided with dispatch.
   - Key dispatch runs before egui widgets see input (`App::raw_input_hook` / start of `logic`).
     egui's Tab focus traversal and default clipboard shortcuts are disabled where they collide.
   - Character bindings use logical (layout-aware) keys. Insert mode supports IME.
