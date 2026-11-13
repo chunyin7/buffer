@@ -475,6 +475,37 @@ reads it, and returns the new one; the presets bind commands to them and apply
 - Each costs a few rope lookups per range, O(log n) each; `trim` also reads the blanks it takes
   off.
 
+| Method | The selection becomes | Vim | Helix |
+|---|---|---|---|
+| `Selection::all(text)` | one range over the whole text | | `%` |
+| `keep_primary()` | the primary range alone | | `,` |
+| `drop_primary()` | the other ranges | | `Alt-,` |
+| `rotate_primary(count, forward)` | the same ranges, with another one primary | | `)`, `(` |
+| `merge()` | one range from the first one's start to the last one's end | | `Alt-minus` |
+| `split_lines(text)` | each range's part of every line it covers | | `Alt-s` |
+| `copy_to_line(text, below)` | its ranges and a copy of each on the lines below or above | | `C`, `Alt-C` |
+
+- After `drop_primary`, the next range is primary, or the previous one after the last; the only
+  range stays. `rotate_primary` wraps around. `merge` points as the primary did.
+- `split_lines` leaves the line breaks out and drops empty parts; a range with no other part, an
+  empty one or one of line breaks only, stays whole. The parts point as the range did. Of the
+  primary range's parts, the one with its block cursor is primary: the one at the head's end,
+  which is the nearest one if the cursor is on a line break. It costs a few lookups per line.
+- `copy_to_line` puts each copy as many lines away as its range is tall, with both ends at the
+  columns they had, counted in graphemes as for `j` and `k` (revisit with them: display cells).
+  - The copy's start must land on a grapheme of its line. A line too short for that is passed
+    over for the next one, so an empty line never gets a copy of a block cursor on a char. An
+    empty range, a caret, may land at a line's end, and a range that starts on a line break on
+    another line's break.
+  - A copy whose end finds its line too short ends with the line. The copy of a range that ends
+    with a line break ends with one too, or with the text on the last line, so whole lines copy
+    onto a last line without a break.
+  - A line break alone, the cursor at a line's end, copies as the one grapheme at its column: a
+    char of a longer line, or the break of a line that ends there, an empty line's too.
+  - A range with no line to hold a copy gets none. The primary range's copy is primary, and a
+    copy that overlaps a range merges with it. A count is the preset's.
+  - It reads each line it tries up to the column.
+
 ## Transactions
 
 A `Transaction` is one edit: a change set and the selection after it. It is internal to
@@ -574,8 +605,9 @@ mapping keeps untouched chars in place and is monotonic, and every result is can
 Generated texts mix multi-byte chars, combining marks, emoji sequences, and line breaks, and some
 span several rope chunks. For selections, they check that merging covers exactly the given
 ranges, that mapping in one pass equals mapping each range alone, and that ranges no change
-touches keep their text; `extend_to_lines` and `trim` are checked against models that split the
-string into lines and graphemes. For lines, they split the text at each `\n` and check the line
+touches keep their text; `extend_to_lines`, `trim`, and `split_lines` are checked against models
+that split the string into lines and graphemes, and unit tests pin the primary range's rules and
+`copy_to_line`. For lines, they split the text at each `\n` and check the line
 count, each line's start and end, and the line of every char boundary against the pieces. For
 graphemes, they compare each method with unicode-segmentation run over the whole string: at every
 char boundary of a short text, and near each chunk edge of a long one, including runs of regional

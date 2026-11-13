@@ -129,6 +129,61 @@ impl Range {
         }
     }
 
+    /// The range's part of each line it covers, without the line breaks; see
+    /// [`Selection::split_lines`].
+    fn split_lines(self, text: &Text) -> impl Iterator<Item = Self> {
+        (text.line_of(self.start())..=text.line_of(self.end())).filter_map(move |line| {
+            let start = self.start().max(text.line_start(line));
+            let end = self.end().min(text.line_end(line));
+            (start < end).then(|| self.spanning(start, end))
+        })
+    }
+
+    /// A copy of the range on the nearest lines below it, or above it, that can hold it; see
+    /// [`Selection::copy_to_line`].
+    fn copy_to_line(self, text: &Text, below: bool) -> Option<Self> {
+        let (first, last) = (text.line_of(self.start()), self.last_line(text));
+        let start_column = text.column_of(self.start());
+        // No column for an end where a line starts: the range holds its last line's break, and
+        // so does its copy.
+        let end_column = (text.line_of(self.end()) == last).then(|| text.column_of(self.end()));
+        // A range that starts on a line break may start on one again, where the line has one.
+        let starts_on_break = !self.is_empty() && self.start() == text.line_end(first);
+        // As many lines away as the range is tall, or further, past lines that are too short.
+        let height = last - first + 1;
+        (height..)
+            .map_while(|lines| {
+                if below {
+                    (last + lines < text.line_count()).then_some((first + lines, last + lines))
+                } else {
+                    Some((first.checked_sub(lines)?, last - lines))
+                }
+            })
+            .find_map(|(first, last)| {
+                // The start lands on a grapheme of the line; an empty range may sit at its end.
+                let start = text.at_column(first, start_column)?;
+                let limit = if starts_on_break {
+                    text.len()
+                } else {
+                    text.line_end(first)
+                };
+                if start >= limit && !self.is_empty() {
+                    return None;
+                }
+                let end = if starts_on_break && first == last {
+                    // A line break alone copies as the one grapheme at its column.
+                    text.next_grapheme_boundary(start)
+                } else {
+                    match end_column {
+                        Some(column) => text.at_column(last, column),
+                        None => Some(text.line_start(last + 1)),
+                    }
+                    .unwrap_or_else(|| text.line_end(last))
+                };
+                Some(self.spanning(start, end))
+            })
+    }
+
     /// Maps the range through a change. Its start stays after text inserted at it and its end
     /// before, so inserts at its edges don't grow it; an empty range moves past such text.
     fn map(self, mapper: &mut Mapper<'_>) -> Self {
@@ -214,6 +269,11 @@ impl Selection {
         };
         selection.normalize();
         selection
+    }
+
+    /// One range over the whole of `text`, as Helix's `%` selects it (ADR 0043).
+    pub fn all(text: &Text) -> Self {
+        Self::single(Range::new(0, text.len()))
     }
 
     /// The ranges, sorted by start.
@@ -342,6 +402,88 @@ impl Selection {
             Some(&primary) => Self::new(primary, trimmed.into_iter().flatten()),
             None => self,
         }
+    }
+
+    /// Keeps only the primary range, as Helix's `,` does (ADR 0043).
+    pub fn keep_primary(self) -> Self {
+        Self::single(self.primary())
+    }
+
+    /// Drops the primary range, as Helix's `Alt-,` does (ADR 0043). The next range is primary
+    /// then, or the previous one after the last. The only range stays.
+    pub fn drop_primary(mut self) -> Self {
+        if self.ranges.len() > 1 {
+            self.ranges.remove(self.primary_index);
+            self.primary_index = self.primary_index.min(self.ranges.len() - 1);
+        }
+        self
+    }
+
+    /// Makes the range `count` ranges after the primary one primary, or before it, as Helix's
+    /// `)` and `(` do (ADR 0043), wrapping around.
+    pub fn rotate_primary(mut self, count: usize, forward: bool) -> Self {
+        let len = self.ranges.len();
+        let steps = count % len;
+        self.primary_index = (self.primary_index + if forward { steps } else { len - steps }) % len;
+        self
+    }
+
+    /// Merges the ranges into one, from the first one's start to the last one's end, pointing as
+    /// the primary does, as Helix's `Alt-minus` does (ADR 0043).
+    pub fn merge(self) -> Self {
+        let (first, last) = (self.ranges[0], self.ranges[self.ranges.len() - 1]);
+        Self::single(self.primary().spanning(first.start(), last.end()))
+    }
+
+    /// Splits every range into its part of each line it covers, without the line breaks, as
+    /// Helix's `Alt-s` does (ADR 0043). Empty parts are dropped, and a range with no other part,
+    /// an empty one or one of line breaks only, stays whole. The parts point as the range did.
+    /// Of the primary range's parts, the one with its block cursor is primary, or the nearest
+    /// one if the cursor is on a line break.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a range ends past the end of `text` or inside a char.
+    pub fn split_lines(self, text: &Text) -> Self {
+        let mut parts = Vec::with_capacity(self.ranges.len());
+        let mut primary = self.primary();
+        for (index, range) in self.ranges.iter().enumerate() {
+            let first = parts.len();
+            parts.extend(range.split_lines(text));
+            if parts.len() == first {
+                parts.push(*range);
+            }
+            if index == self.primary_index {
+                // The block cursor is at the head's end of the range.
+                let at_head = if range.head < range.anchor {
+                    first
+                } else {
+                    parts.len() - 1
+                };
+                primary = parts[at_head];
+            }
+        }
+        Self::new(primary, parts)
+    }
+
+    /// Adds a copy of every range on the lines below it, or above it, as Helix's `C` and `Alt-C`
+    /// do (ADR 0043). The copy is as many lines away as the range is tall, with its ends at the
+    /// same columns, counted in graphemes. A line too short for the copy's start to land on a
+    /// grapheme is passed over for the next one; an empty range may land at a line's end, and a
+    /// range that starts on a line break on another one. A copy whose end finds its line too
+    /// short ends with the line. The copy of a range that ends with a line break ends with one
+    /// too, or with the text on the last line; a line break alone, a cursor at a line's end,
+    /// copies as the one grapheme at its column. A range with no such lines gets no copy. The
+    /// primary range's copy is primary, and copies that overlap a range merge with it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a range ends past the end of `text` or inside a char.
+    pub fn copy_to_line(self, text: &Text, below: bool) -> Self {
+        let copy = |range: &Range| range.copy_to_line(text, below);
+        let primary = copy(&self.primary()).unwrap_or(self.primary());
+        let copies = self.ranges.iter().filter_map(copy);
+        Self::new(primary, self.ranges.iter().copied().chain(copies))
     }
 
     #[expect(
@@ -492,6 +634,87 @@ mod tests {
         assert_eq!(Selection::single(blank).trim(&text).primary(), blank);
     }
 
+    #[test]
+    fn the_primary_range_is_kept_dropped_or_rotated() {
+        let ranges = [Range::new(0, 1), Range::new(2, 3), Range::new(4, 5)];
+        let with_primary = |index: usize| Selection::new(ranges[index], ranges);
+        assert_eq!(with_primary(1).keep_primary().ranges(), [ranges[1]]);
+        // The next range takes over from a dropped primary, or the previous one after the last.
+        let dropped = with_primary(1).drop_primary();
+        assert_eq!(dropped.ranges(), [ranges[0], ranges[2]]);
+        assert_eq!(dropped.primary(), ranges[2]);
+        assert_eq!(with_primary(2).drop_primary().primary(), ranges[1]);
+        let only = Selection::single(ranges[0]);
+        assert_eq!(only.clone().drop_primary(), only);
+        // Rotating wraps around, either way.
+        assert_eq!(with_primary(1).rotate_primary(2, true).primary(), ranges[0]);
+        assert_eq!(
+            with_primary(1).rotate_primary(5, false).primary(),
+            ranges[2]
+        );
+    }
+
+    #[test]
+    fn merge_spans_the_ranges_and_points_as_the_primary_does() {
+        let others = [Range::new(0, 1), Range::new(4, 5)];
+        let forward = Selection::new(Range::new(2, 3), others);
+        assert_eq!(forward.merge().ranges(), [Range::new(0, 5)]);
+        let backward = Selection::new(Range::new(3, 2), others);
+        assert_eq!(backward.merge().ranges(), [Range::new(5, 0)]);
+    }
+
+    #[test]
+    fn split_lines_leaves_the_line_breaks_out() {
+        // Lines `ab`, `cd`, an empty one, and `ef` start at 0, 3, 6, and 7.
+        let text = Text::from("ab\ncd\n\nef");
+        let split = Selection::single(Range::new(1, 8)).split_lines(&text);
+        let parts = [Range::new(1, 2), Range::new(3, 5), Range::new(7, 8)];
+        assert_eq!(split.ranges(), parts);
+        // The part with the block cursor is primary: the last one, or the first one backward.
+        assert_eq!(split.primary(), parts[2]);
+        let split = Selection::single(Range::new(8, 1)).split_lines(&text);
+        let parts = [Range::new(2, 1), Range::new(5, 3), Range::new(8, 7)];
+        assert_eq!(split.ranges(), parts);
+        assert_eq!(split.primary(), parts[0]);
+        // A range of line breaks only stays whole.
+        let breaks = Selection::single(Range::new(5, 7));
+        assert_eq!(breaks.clone().split_lines(&text), breaks);
+    }
+
+    #[test]
+    fn copy_to_line_keeps_the_columns_and_passes_over_short_lines() {
+        // Lines `abcd`, `ab`, an empty one, `abcdef`, and `xy` start at 0, 5, 8, 9, and 16.
+        let text = Text::from("abcd\nab\n\nabcdef\nxy");
+        let copy = |range, below| {
+            let selection = Selection::single(range).copy_to_line(&text, below);
+            (selection.ranges().to_vec(), selection.primary())
+        };
+        // From `c` on the first line, the next two lines are too short. The copy is primary.
+        let (on_c, copied) = (Range::new(2, 3), Range::new(11, 12));
+        assert_eq!(copy(on_c, true), (vec![on_c, copied], copied));
+        assert_eq!(copy(copied, false), (vec![on_c, copied], on_c));
+        // An empty range can sit at the end of `ab`.
+        assert_eq!(copy(Range::point(2), true).1, Range::point(7));
+        // A copy ends with a line too short for its end, and points as the range does.
+        assert_eq!(copy(Range::new(14, 10), true).1, Range::new(18, 17));
+        // A range two lines tall goes two lines down, or further: here, three.
+        assert_eq!(copy(Range::new(1, 6), true).1, Range::new(10, 17));
+        // A whole line with its break: its copy is the last line, which has none.
+        assert_eq!(copy(Range::new(9, 16), true).1, Range::new(16, 18));
+        // A cursor on a line break stays one grapheme wide: on a char of a longer line, or on
+        // the break of a line that ends at its column. The last line has no break to hold it.
+        assert_eq!(copy(Range::new(7, 8), true).1, Range::new(11, 12));
+        assert_eq!(copy(Range::new(7, 8), false).1, Range::new(2, 3));
+        assert_eq!(copy(Range::new(15, 16), true).1, Range::new(15, 16));
+        let breaks =
+            Selection::single(Range::new(2, 3)).copy_to_line(&Text::from("ab\n\nab\n"), true);
+        assert_eq!(breaks.primary(), Range::new(6, 7));
+        // Without a line to hold it, there is no copy.
+        let last = Range::new(16, 17);
+        assert_eq!(copy(last, true), (vec![last], last));
+        assert_eq!(copy(on_c, false), (vec![on_c], on_c));
+    }
+
     /// A primary range and up to six others over offsets 0..32, pointing either way.
     fn primary_and_others() -> impl Strategy<Value = (Range, Vec<Range>)> {
         let range = (0..32_usize, 0..32_usize).prop_map(|(anchor, head)| Range::new(anchor, head));
@@ -528,6 +751,40 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn split_lines_gives_the_pieces_of_each_range_between_line_breaks(
+            (string, (primary, others)) in strategies::text_and_ranges(),
+        ) {
+            let text = Text::from(string.as_str());
+            // Ranges on grapheme boundaries, as a preset keeps them: none ends inside a `\r\n`.
+            let selection = Selection::new(primary, others).for_normal_mode(&text);
+            let model = |range: &Range| {
+                let mut parts = Vec::new();
+                let mut start = range.start();
+                for piece in string[range.start()..range.end()].split_inclusive('\n') {
+                    let content = match piece.strip_suffix('\n') {
+                        Some(content) => content.strip_suffix('\r').unwrap_or(content),
+                        None => piece,
+                    };
+                    if !content.is_empty() {
+                        parts.push(range.spanning(start, start + content.len()));
+                    }
+                    start += piece.len();
+                }
+                if parts.is_empty() {
+                    parts.push(*range);
+                }
+                parts
+            };
+            let split = selection.clone().split_lines(&text);
+            let parts: Vec<Range> = selection.ranges().iter().flat_map(model).collect();
+            prop_assert_eq!(split.ranges(), &parts[..]);
+            let primary = selection.primary();
+            let of_primary = model(&primary);
+            let at_head = if primary.head < primary.anchor { 0 } else { of_primary.len() - 1 };
+            prop_assert_eq!(split.primary(), of_primary[at_head]);
+        }
+
         #[test]
         fn extend_to_lines_covers_the_lines_of_each_range(
             (string, (primary, others)) in strategies::text_and_ranges(),

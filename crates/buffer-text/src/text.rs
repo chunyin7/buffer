@@ -380,6 +380,20 @@ impl Text {
         (target, goal)
     }
 
+    /// `offset`'s column: the graphemes from its line's start to it.
+    pub(crate) fn column_of(&self, offset: usize) -> usize {
+        let start = self.line_start(self.line_of(offset));
+        self.walk_graphemes(start, offset, usize::MAX).1
+    }
+
+    /// Where the grapheme at `column` starts on `line`, or the end of the line's content if the
+    /// line holds just `column` graphemes. `None` if it holds fewer.
+    pub(crate) fn at_column(&self, line: usize, column: usize) -> Option<usize> {
+        let (offset, steps) =
+            self.walk_graphemes(self.line_start(line), self.line_end(line), column);
+        (steps == column).then_some(offset)
+    }
+
     /// Steps grapheme by grapheme from `from`, a grapheme boundary, while it is before `limit`
     /// and has taken fewer than `max` steps. Returns where it stops and the steps it took: from
     /// inside a grapheme at `limit`, it stops at that grapheme's end, past `limit`.
