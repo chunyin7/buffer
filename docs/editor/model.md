@@ -15,8 +15,7 @@ motions), [0038](../decisions/0038-text-objects.md) (text objects), and
 
 Status: text with lines and grapheme boundaries, grapheme, line, word, find, paragraph, and
 bracket motions, text objects, change sets, selections with block cursors, transactions, and
-documents with undo history exist, and a selection yanks its text. Paste lands later in M1;
-registers live in `buffer-modal`.
+documents with undo history exist, and yank and paste. Registers live in `buffer-modal`.
 
 ## Text
 
@@ -477,6 +476,17 @@ text could edit the wrong bytes, or panic halfway and leave the text out of step
   `Err(InvalidChange)`, and the text, the selection, and the pending revision stay as they were.
 - An edit joins the pending revision, composed with the edits before it. `set_selection` changes
   only the selection.
+- `paste(strings, placement, select, now)` pastes one string per range of the selection, in the
+  order `Selection::yank` returns them ([0040](../decisions/0040-registers-in-modal.md)):
+  `Placement::Before` at the range's start, `After` at its end, `Replace` in its place. It is an
+  `edit_with` over the document's own ranges.
+  - `select(index, span)` returns the range to leave for each string, given the span it takes up
+    in the changed text: the span to select what was pasted, as Helix does, or a point in it for
+    Vim's cursor. The edit records that selection, so a redo restores it; a selection set after
+    the paste would be lost there. `select` runs before the change is applied, so it reads the
+    strings, not the changed text.
+  - The presets do the rest: mapping a register's values onto the ranges, repeating a string for
+    a count, and moving the ranges to line edges for a linewise paste.
 - `commit()` ends the pending revision. The caller commits where
   [0029](../decisions/0029-undo-insert-sessions.md) ends an undo step: on leaving Insert mode, on
   the checkpoint command, on a cursor move that isn't typing, and after each Normal-mode command.
@@ -519,6 +529,7 @@ broken contract only our own bug can cause panics before anything changes.
 | `Document::edit`, `edit_with`: a range reversed, out of order, past the end, or splitting a char | `Err(InvalidChange)`, before anything changes; spans can be stale, so the caller recomputes |
 | `Document::edit_with`: `selection` returns a selection past the end of the changed text | panic, before anything changes |
 | `Document::set_selection`: a selection past the end of the text | panic |
+| `Document::paste`: not one string per range, a range of the selection inside a char, or `select` returns a range past the end of the changed text | panic, before anything changes |
 | `ChangeSet::map`: a position past the end of the text | panic |
 | `Text::is_char_boundary`, `is_grapheme_boundary`: an offset past the end of the text | panic |
 | `Text::line_of`, `next_grapheme_boundary`, `prev_grapheme_boundary`: an offset past the end of the text or inside a char | panic |
@@ -587,4 +598,6 @@ redos, and jumps by count and by time. After each, the text must be exactly the 
 revision the history is at, pending edits must start from it, and a jump by count must land
 where it should; at the end, the oldest and the newest revision must be reachable. Unit tests pin
 the rules: the pause boundary, commit points, edits that cancel out, rejected edits, restored
-selections, redo after a jump into another branch, and the limits of time jumps.
+selections, redo after a jump into another branch, and the limits of time jumps. For pastes, a
+property test checks the text against a model for each placement, and that each span `select`
+gets holds its string; unit tests pin the three placements and the selection a redo restores.

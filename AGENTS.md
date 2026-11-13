@@ -18,8 +18,9 @@ When adding tests, they should test non-trivial properties and should be added w
   README, CONTRIBUTING, architecture doc, and ADRs are in place. `buffer-app` opens an empty
   window, `buffer-text` has text with lines and grapheme boundaries, grapheme, line, word, find,
   paragraph, and bracket motions, text objects, change sets, selections with block cursors,
-  transactions, and documents with undo history ([docs/editor/model.md](docs/editor/model.md)),
-  and `buffer-modal` has keys and keymaps ([docs/editor/keymaps.md](docs/editor/keymaps.md)).
+  transactions, documents with undo history, and yank and paste
+  ([docs/editor/model.md](docs/editor/model.md)), and `buffer-modal` has keys and keymaps
+  ([docs/editor/keymaps.md](docs/editor/keymaps.md)).
   Everything else below is decided, not implemented, unless marked otherwise.
 - Current milestone: **M0 Foundations**; **M1 Editing** has started in `buffer-text` and
   `buffer-modal`. Milestones and planned docs: [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -169,8 +170,10 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
   each preset's rules (Vim's numbered shift, appending, types; Helix's per-range values; computed
   registers) are the presets'. A value is one string per yanked range. `buffer-text` yanks a
   selection's ranges and pastes one string per range (before, after, or in place) through the
-  `Document`; the preset maps a register's values onto the ranges. `+`/`*` go through a clipboard
-  trait in `buffer-modal`, implemented in ui or app.
+  `Document`; the preset maps a register's values onto the ranges, moves them first for a
+  linewise paste, and says what range each pasted string leaves, so undo and redo restore the
+  preset's own selection. `+`/`*` go through a clipboard trait in `buffer-modal`, implemented in
+  ui or app.
 - **Vim and Helix presets at launch.**
   - Keymaps are data (TOML) binding key sequences to named commands; user config overrides
     presets.

@@ -8,6 +8,17 @@ use crate::{ChangeSet, InvalidChange, Range, Selection, Text};
 /// An edit this long or longer after the previous one starts a new revision (ADR 0029).
 const PAUSE: Duration = Duration::from_secs(1);
 
+/// Where [`Document::paste`] puts each string (ADR 0040).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    /// Before the range, at its start.
+    Before,
+    /// After the range, at its end.
+    After,
+    /// In place of the range's text.
+    Replace,
+}
+
 /// A text, its selection, and its undo history.
 ///
 /// Every edit, undo, and redo goes through the document, and it builds every change set from its
@@ -146,6 +157,58 @@ impl Document {
         };
         self.pending = Some(pending);
         Ok(())
+    }
+
+    /// Pastes one string per range of the selection at `now`, each where `placement` puts it
+    /// (ADR 0040). `strings` are in the order of the ranges, as [`Selection::yank`] returns
+    /// them. The edit joins the pending revision, as in [`edit`](Self::edit).
+    ///
+    /// `select` gives the range to leave for each string, from the string's index and the span
+    /// it takes up in the changed text: all of it to select what was pasted, as Helix does, or a
+    /// point in it for Vim's cursor. These ranges are the selection after the paste, the one a
+    /// redo restores; the primary range's stays primary, and ranges that overlap merge.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `strings` doesn't hold one string per range, if a range of the selection ends
+    /// inside a char, or if `select` returns a range that ends past the changed text. Nothing has
+    /// changed by then.
+    #[expect(
+        clippy::expect_used,
+        reason = "a selection's ranges are sorted, apart, and inside the text"
+    )]
+    pub fn paste(
+        &mut self,
+        strings: Vec<String>,
+        placement: Placement,
+        mut select: impl FnMut(usize, ops::Range<usize>) -> Range,
+        now: Instant,
+    ) {
+        let ranges = self.selection.ranges();
+        assert_eq!(
+            strings.len(),
+            ranges.len(),
+            "a paste takes one string per range"
+        );
+        let mut changes = Vec::with_capacity(ranges.len());
+        let mut pasted = Vec::with_capacity(ranges.len());
+        // The bytes the changes before this one add and remove, which move its string.
+        let (mut added, mut removed) = (0, 0);
+        for (index, (range, string)) in ranges.iter().zip(strings).enumerate() {
+            let replaced = match placement {
+                Placement::Before => range.start()..range.start(),
+                Placement::After => range.end()..range.end(),
+                Placement::Replace => range.start()..range.end(),
+            };
+            let start = replaced.start + added - removed;
+            pasted.push(select(index, start..start + string.len()));
+            added += string.len();
+            removed += replaced.len();
+            changes.push((replaced, string));
+        }
+        let selection = Selection::new(pasted[self.selection.primary_index()], pasted);
+        self.edit_with(changes, |_| selection, now)
+            .expect("the selection's ranges are on char boundaries");
     }
 
     /// Ends the pending revision, so the next edit starts a new one. The caller commits where an
@@ -309,6 +372,68 @@ mod tests {
         assert_eq!(document.selection(), &after);
     }
 
+    /// Selects what was pasted, as Helix does.
+    fn pasted(_: usize, span: ops::Range<usize>) -> Range {
+        Range::new(span.start, span.end)
+    }
+
+    #[test]
+    fn paste_puts_a_string_at_each_range() {
+        let now = Instant::now();
+        // `ab` backward and `cd`, the primary range.
+        let selection = Selection::new(Range::new(3, 5), [Range::new(2, 0)]);
+        let paste = |placement| {
+            let mut document = Document::new(Text::from("ab cd"), now);
+            document.set_selection(selection.clone());
+            document.paste(
+                vec!["X".to_owned(), "YZ".to_owned()],
+                placement,
+                pasted,
+                now,
+            );
+            (text(&document), document.selection().clone())
+        };
+        let selected = |first, second| Selection::new(second, [first]);
+        assert_eq!(
+            paste(Placement::Before),
+            (
+                "Xab YZcd".to_owned(),
+                selected(Range::new(0, 1), Range::new(4, 6))
+            )
+        );
+        assert_eq!(
+            paste(Placement::After),
+            (
+                "abX cdYZ".to_owned(),
+                selected(Range::new(2, 3), Range::new(6, 8))
+            )
+        );
+        assert_eq!(
+            paste(Placement::Replace),
+            (
+                "X YZ".to_owned(),
+                selected(Range::new(0, 1), Range::new(2, 4))
+            )
+        );
+    }
+
+    #[test]
+    fn redo_restores_the_selection_a_paste_left() {
+        let now = Instant::now();
+        let mut document = Document::new(Text::from("ab"), now);
+        let before = Selection::single(Range::new(0, 1));
+        document.set_selection(before.clone());
+        // Vim's `p` of one line: the cursor goes on the last char pasted.
+        let on_last = |_, span: ops::Range<usize>| Range::point(span.end - 1);
+        document.paste(vec!["xyz".to_owned()], Placement::After, on_last, now);
+        assert_eq!(text(&document), "axyzb");
+        assert_eq!(document.selection(), &Selection::single(Range::point(3)));
+        assert!(document.undo());
+        assert_eq!(document.selection(), &before);
+        assert!(document.redo());
+        assert_eq!(document.selection(), &Selection::single(Range::point(3)));
+    }
+
     #[test]
     fn redo_follows_the_branch_visited_last() {
         let now = Instant::now();
@@ -446,6 +571,45 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn paste_reports_where_each_string_lands(
+            (string, (primary, others)) in strategies::text_and_ranges(),
+            strings in vec(strategies::insert(), 5),
+            placement in prop_oneof![
+                Just(Placement::Before),
+                Just(Placement::After),
+                Just(Placement::Replace),
+            ],
+        ) {
+            let now = Instant::now();
+            let mut document = Document::new(Text::from(string.as_str()), now);
+            let selection = Selection::new(primary, others);
+            document.set_selection(selection.clone());
+            let strings = strings[..selection.ranges().len()].to_vec();
+            let changes: Vec<strategies::Change> = selection
+                .ranges()
+                .iter()
+                .map(|range| match placement {
+                    Placement::Before => range.start()..range.start(),
+                    Placement::After => range.end()..range.end(),
+                    Placement::Replace => range.start()..range.end(),
+                })
+                .zip(strings.iter().cloned())
+                .collect();
+
+            let mut spans = Vec::new();
+            let select = |index, span: ops::Range<usize>| {
+                spans.push((index, span.clone()));
+                pasted(index, span)
+            };
+            document.paste(strings.clone(), placement, select, now);
+            let text = text(&document);
+            prop_assert_eq!(&text, &strategies::apply(&string, &changes));
+            for (index, span) in spans {
+                prop_assert_eq!(&text[span], &strings[index]);
+            }
+        }
+
         #[test]
         fn every_revision_keeps_its_text((text, actions) in (strategies::text(), actions())) {
             let mut now = Instant::now();
