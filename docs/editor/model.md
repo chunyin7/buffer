@@ -659,6 +659,11 @@ chunks. Unit tests pin nesting, other kinds inside a pair, pairs across lines, C
 pairs, angle brackets and curly quotes, and brackets inside graphemes. Another checks that a
 grapheme starts at every bracket after an ASCII char, which lets a scan skip the check there.
 
+For quotes and pairs of chars, they compare `quote_object` and `pair_object` with models that
+walk the graphemes of the line or the paragraph, from every char boundary, in texts of quotes,
+letters and digits around them, line breaks, and chars that join the grapheme before or after
+them. Unit tests pin apostrophes, curly quotes, counts, and blank lines.
+
 For Normal mode, they work out what each range becomes on the grapheme boundaries of the whole
 string, merge the results, and compare them with `for_normal_mode`, for the generated ranges and
 for an empty range at the end of each text; every range must end on grapheme boundaries and be

@@ -52,10 +52,13 @@ impl Text {
         }
     }
 
-    /// The pair of `delimiter`s around `offset`, as Helix's `mi*` and `ma*` select it, for a
-    /// char that is no bracket or quote (ADR 0038): the `count`-th one before `offset` and the
-    /// `count`-th one after it, inside the paragraph `offset` is on. A delimiter is a grapheme
-    /// whose first char is `delimiter`. `Inside` lies between them; `Around` includes them.
+    /// The pair of `delimiter`s around `offset`, as Helix's `mi*` and `ma*` select it (ADR
+    /// 0038): the `count`-th one before `offset` and the `count`-th one after it, inside the
+    /// paragraph `offset` is on. A delimiter is a grapheme whose first char is `delimiter`.
+    /// `Inside` lies between them; `Around` includes them. It is meant for a char that is no
+    /// bracket or quote, and doesn't check: a preset sends those to
+    /// [`enclosing_bracket_object`](Self::enclosing_bracket_object) and
+    /// [`quote_object`](Self::quote_object), and here they pair as any char does.
     ///
     /// Returns `None` if `offset` is on a delimiter or a blank line, if either side runs out, or
     /// with a count of 0. A call reads the paragraph out to the delimiters.
@@ -98,8 +101,13 @@ fn is_apostrophe(line: &str, at: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+    use proptest::sample::select;
+
     use super::*;
     use crate::Extent::{Around, Inside};
+    use crate::strategies;
 
     #[test]
     fn quotes_pair_from_the_line_start() {
@@ -149,5 +157,114 @@ mod tests {
         assert_eq!(text.pair_object(12, 1, '*', Inside), None);
         assert_eq!(text.pair_object(14, 1, '*', Inside), Some(14..15));
         assert_eq!(text.pair_object(9, 2, '*', Inside), None);
+    }
+
+    /// Quotes and `*`, letters and digits for apostrophes, blanks, line breaks, and chars that
+    /// join the grapheme before or after them, so that a quote can be inside one.
+    const PIECES: &[&str] = &[
+        "\"", "'", "‘", "’", "*", "a", "1", "日", " ", "\n", "\r\n", "\u{301}", "\u{600}",
+    ];
+
+    /// Lines of [`PIECES`] and a char boundary in them.
+    fn lines_and_offset() -> impl Strategy<Value = (String, usize)> {
+        vec(select(PIECES), 0..40)
+            .prop_map(|pieces| pieces.concat())
+            .prop_flat_map(|lines| {
+                let offset = select(strategies::char_boundaries(&lines));
+                (Just(lines), offset)
+            })
+    }
+
+    /// The graphemes of `string[bounds]`, as spans of `string`.
+    fn graphemes_in(string: &str, bounds: Range<usize>) -> Vec<Range<usize>> {
+        string[bounds.clone()]
+            .grapheme_indices(true)
+            .map(|(at, grapheme)| bounds.start + at..bounds.start + at + grapheme.len())
+            .collect()
+    }
+
+    /// The string around `offset` on `line`, a span of `string`, walking the line's graphemes
+    /// from its start: a quote opens a string, the next one closes it, and so on.
+    fn quote_model(
+        string: &str,
+        line: Range<usize>,
+        offset: usize,
+        (open, close): (char, char),
+        extent: Extent,
+    ) -> Option<Range<usize>> {
+        let graphemes = graphemes_in(string, line);
+        let first_char = |index: usize| string[graphemes[index].clone()].chars().next();
+        let is_alphanumeric = |index: Option<usize>| {
+            let at = index.filter(|&index| index < graphemes.len());
+            at.and_then(first_char).is_some_and(char::is_alphanumeric)
+        };
+        let mut opening: Option<&Range<usize>> = None;
+        for (index, grapheme) in graphemes.iter().enumerate() {
+            let quote = first_char(index);
+            let apostrophe = matches!(quote, Some('\'' | '’'))
+                && is_alphanumeric(index.checked_sub(1))
+                && is_alphanumeric(Some(index + 1));
+            match opening {
+                _ if apostrophe => {}
+                None if quote == Some(open) => opening = Some(grapheme),
+                Some(opened) if quote == Some(close) => {
+                    if (opened.start..grapheme.end).contains(&offset) {
+                        return Some(match extent {
+                            Inside => opened.end..grapheme.start,
+                            Around => opened.start..grapheme.end,
+                        });
+                    }
+                    opening = None;
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    proptest! {
+        #[test]
+        fn quote_objects_match_a_model_of_the_lines_graphemes(
+            (string, offset) in lines_and_offset(),
+            quote in select(&['"', '\'', '‘', '’'][..]),
+            around in any::<bool>(),
+        ) {
+            let text = Text::from(string.as_str());
+            let extent = if around { Around } else { Inside };
+            let line = text.line_of(offset);
+            let pair = if quote == '‘' || quote == '’' { ('‘', '’') } else { (quote, quote) };
+            prop_assert_eq!(
+                text.quote_object(offset, quote, extent),
+                quote_model(&string, text.line_start(line)..text.line_end(line), offset, pair, extent)
+            );
+        }
+
+        #[test]
+        fn pair_objects_match_a_model_of_the_paragraphs_graphemes(
+            (string, offset) in lines_and_offset(),
+            count in prop_oneof![Just(1), 0..4_usize],
+            around in any::<bool>(),
+        ) {
+            let text = Text::from(string.as_str());
+            let extent = if around { Around } else { Inside };
+            // The `count`-th `*` before the offset and after it, in its paragraph.
+            let model = || {
+                let lines = text.paragraph_lines(text.line_of(offset))?;
+                let bounds = text.line_start(lines.start)..text.line_end(lines.end - 1);
+                let mut stars = graphemes_in(&string, bounds);
+                stars.retain(|grapheme| string[grapheme.clone()].starts_with('*'));
+                let nth = count.checked_sub(1)?;
+                if stars.iter().any(|star| star.start == offset) {
+                    return None;
+                }
+                let before = stars.iter().rev().filter(|star| star.start < offset).nth(nth)?;
+                let after = stars.iter().filter(|star| star.start > offset).nth(nth)?;
+                Some(match extent {
+                    Inside => before.end..after.start,
+                    Around => before.start..after.end,
+                })
+            };
+            prop_assert_eq!(text.pair_object(offset, count, '*', extent), model());
+        }
     }
 }
