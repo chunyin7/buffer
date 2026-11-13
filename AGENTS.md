@@ -17,8 +17,8 @@ When adding tests, they should test non-trivial properties and should be added w
 - Pre-alpha: licenses, the workspace with the target crate layout, lints, cargo-deny, CI, and the
   README, CONTRIBUTING, architecture doc, and ADRs are in place. `buffer-app` opens an empty
   window, `buffer-text` has text with lines and grapheme boundaries, grapheme, line, word, find,
-  paragraph, and bracket motions, text objects, change sets, selections with block cursors,
-  transactions, documents with undo history, and yank and paste
+  paragraph, and bracket motions, text objects, change sets, selections with block cursors and
+  operations on them, transactions, documents with undo history, and yank and paste
   ([docs/editor/model.md](docs/editor/model.md)), and `buffer-modal` has keys and keymaps
   ([docs/editor/keymaps.md](docs/editor/keymaps.md)).
   Everything else below is decided, not implemented, unless marked otherwise.
@@ -122,9 +122,9 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
   primary. The block cursor is the grapheme at the head, or the one before it when the range
   points forward. Normal mode keeps ranges at least one grapheme wide; Insert mode allows empty
   ones. Vim's cursor is a one-grapheme range, and operator + motion selects, then acts.
-- **Selection operations are named `Selection` methods in `buffer-text`** (decided, not
-  implemented): collapse, flip, extend to whole lines, trim; select all, keep, drop, or rotate
-  the primary, merge, split into lines, copy onto the next line, and a block from two corners.
+- **Selection operations are named `Selection` methods in `buffer-text`:** collapse, flip,
+  extend to whole lines, trim; select all, keep, drop, or rotate the primary, merge, split into
+  lines, copy onto the next line, and a block from two corners.
   - When a range splits, the part with its block cursor is primary; a dropped primary hands over
     to the next range.
   - Vim's linewise and blockwise Visual modes are the Vim preset's: the document holds the

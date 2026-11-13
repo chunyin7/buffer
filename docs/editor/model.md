@@ -15,8 +15,9 @@ motions), [0038](../decisions/0038-text-objects.md) (text objects),
 [0043](../decisions/0043-selection-operations.md) (selection operations).
 
 Status: text with lines and grapheme boundaries, grapheme, line, word, find, paragraph, and
-bracket motions, text objects, change sets, selections with block cursors, transactions, and
-documents with undo history exist, and yank and paste. Registers live in `buffer-modal`.
+bracket motions, text objects, change sets, selections with block cursors and operations on them,
+transactions, and documents with undo history exist, and yank and paste. Registers live in
+`buffer-modal`.
 
 ## Text
 
@@ -484,6 +485,7 @@ reads it, and returns the new one; the presets bind commands to them and apply
 | `merge()` | one range from the first one's start to the last one's end | | `Alt-minus` |
 | `split_lines(text)` | each range's part of every line it covers | | `Alt-s` |
 | `copy_to_line(text, below)` | its ranges and a copy of each on the lines below or above | | `C`, `Alt-C` |
+| `Selection::block(text, anchor, head, to_line_ends)` | one range per line between two corners | `Ctrl-V` | |
 
 - After `drop_primary`, the next range is primary, or the previous one after the last; the only
   range stays. `rotate_primary` wraps around. `merge` points as the primary did.
@@ -505,6 +507,18 @@ reads it, and returns the new one; the presets bind commands to them and apply
   - A range with no line to hold a copy gets none. The primary range's copy is primary, and a
     copy that overlaps a range merges with it. A count is the preset's.
   - It reads each line it tries up to the column.
+- `block` builds Vim's blockwise selection from where the two corners' graphemes start. Each
+  line from one corner's to the other's gets a range over the columns between the corners',
+  both included, counted in graphemes (revisit with `j` and `k`). With `to_line_ends`, every
+  range runs to the end of its line's content, as after `$`.
+  - A line that ends before the block's first column gets no range, and one that ends inside it
+    a shorter one. There is no padding.
+  - The ranges point toward the head's column, and the one on the head's line is primary. A
+    head's line that ends before the block gets an empty range at its end, so the cursor has a
+    place: it holds no part of the block, and the preset leaves it out when it acts.
+  - The corners, the goal column, `o` and `O`, and `gv` are the Vim preset's, which builds the
+    block again after each move. `I` and `A` are inserts at every range.
+  - It reads each line up to the block's last column.
 
 ## Transactions
 
@@ -605,9 +619,9 @@ mapping keeps untouched chars in place and is monotonic, and every result is can
 Generated texts mix multi-byte chars, combining marks, emoji sequences, and line breaks, and some
 span several rope chunks. For selections, they check that merging covers exactly the given
 ranges, that mapping in one pass equals mapping each range alone, and that ranges no change
-touches keep their text; `extend_to_lines`, `trim`, and `split_lines` are checked against models
-that split the string into lines and graphemes, and unit tests pin the primary range's rules and
-`copy_to_line`. For lines, they split the text at each `\n` and check the line
+touches keep their text; `extend_to_lines`, `trim`, `split_lines`, and `block` are checked
+against models that split the string into lines and graphemes, and unit tests pin the primary
+range's rules and `copy_to_line`. For lines, they split the text at each `\n` and check the line
 count, each line's start and end, and the line of every char boundary against the pieces. For
 graphemes, they compare each method with unicode-segmentation run over the whole string: at every
 char boundary of a short text, and near each chunk edge of a long one, including runs of regional

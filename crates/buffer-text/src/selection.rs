@@ -276,6 +276,49 @@ impl Selection {
         Self::single(Range::new(0, text.len()))
     }
 
+    /// The block between two corners, as Vim's blockwise Visual mode selects it (ADR 0043):
+    /// `anchor` and `head` are where the corners' graphemes start. Every line from one corner's
+    /// to the other's gets a range over the columns from one corner's to the other's, both
+    /// graphemes included, with columns counted in graphemes. With `to_line_ends`, every range
+    /// runs on to the end of its line's content instead, as after Vim's `$`.
+    ///
+    /// A line that ends before the block's first column gets no range, and one that ends inside
+    /// the block a shorter one. The ranges point toward the head's column, and the one on the
+    /// head's line is primary. If that line ends before the block, it gets an empty range at its
+    /// end, for the cursor; it holds no part of the block.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `anchor` or `head` is past the end of `text` or inside a char.
+    pub fn block(text: &Text, anchor: usize, head: usize, to_line_ends: bool) -> Self {
+        let (anchor_line, head_line) = (text.line_of(anchor), text.line_of(head));
+        let (anchor_column, head_column) = (text.column_of(anchor), text.column_of(head));
+        let (left, right) = (
+            anchor_column.min(head_column),
+            anchor_column.max(head_column),
+        );
+        let backward = head_column < anchor_column && !to_line_ends;
+        let on_line = |line: usize| {
+            let line_end = text.line_end(line);
+            let start = text
+                .at_column(line, left)
+                .filter(|&start| start < line_end)?;
+            let end = if to_line_ends {
+                line_end
+            } else {
+                text.at_column(line, right + 1).unwrap_or(line_end)
+            };
+            Some(if backward {
+                Range::new(end, start)
+            } else {
+                Range::new(start, end)
+            })
+        };
+        let cursor = on_line(head_line).unwrap_or_else(|| Range::point(text.line_end(head_line)));
+        let lines = anchor_line.min(head_line)..=anchor_line.max(head_line);
+        Self::new(cursor, lines.filter_map(on_line))
+    }
+
     /// The ranges, sorted by start.
     pub fn ranges(&self) -> &[Range] {
         &self.ranges
@@ -715,6 +758,46 @@ mod tests {
         assert_eq!(copy(on_c, false), (vec![on_c], on_c));
     }
 
+    #[test]
+    fn block_covers_the_columns_between_two_corners() {
+        // Lines `abcdef`, `ab`, an empty one, `abcd`, and `abcdef` start at 0, 7, 10, 11, and 16.
+        let text = Text::from("abcdef\nab\n\nabcd\nabcdef");
+        let block = |anchor, head, to_line_ends| {
+            let selection = Selection::block(&text, anchor, head, to_line_ends);
+            (selection.ranges().to_vec(), selection.primary())
+        };
+        // From `b` on the first line to `d` on the last: columns 1 to 3. `ab` ends inside the
+        // block, and the empty line before it.
+        let ranges = vec![
+            Range::new(1, 4),
+            Range::new(8, 9),
+            Range::new(12, 15),
+            Range::new(17, 20),
+        ];
+        assert_eq!(block(1, 19, false), (ranges, Range::new(17, 20)));
+        // From `d` to `b`, on the first line and the last one, the ranges point backward. The
+        // head's line has the primary one.
+        let ranges = vec![
+            Range::new(4, 1),
+            Range::new(9, 8),
+            Range::new(15, 12),
+            Range::new(20, 17),
+        ];
+        assert_eq!(block(3, 17, false), (ranges.clone(), Range::new(20, 17)));
+        assert_eq!(block(19, 1, false), (ranges, Range::new(4, 1)));
+        // After `$`, every range runs to its line's end.
+        let ranges = vec![
+            Range::new(1, 6),
+            Range::new(8, 9),
+            Range::new(12, 15),
+            Range::new(17, 22),
+        ];
+        assert_eq!(block(1, 19, true), (ranges, Range::new(17, 22)));
+        // A cursor on the empty line: column 0, and an empty range there for it.
+        let ranges = vec![Range::new(2, 0), Range::new(9, 7), Range::point(10)];
+        assert_eq!(block(1, 10, false), (ranges, Range::point(10)));
+    }
+
     /// A primary range and up to six others over offsets 0..32, pointing either way.
     fn primary_and_others() -> impl Strategy<Value = (Range, Vec<Range>)> {
         let range = (0..32_usize, 0..32_usize).prop_map(|(anchor, head)| Range::new(anchor, head));
@@ -750,7 +833,77 @@ mod tests {
         }
     }
 
+    /// What `Selection::block` returns, its primary range and its ranges, worked out from the
+    /// graphemes of each line of `string`.
+    fn block_model(string: &str, corners: Range, to_line_ends: bool) -> (Range, Vec<Range>) {
+        // Each line: where the graphemes of its content start, and where the content ends.
+        let pieces: Vec<&str> = string.split('\n').collect();
+        let mut lines: Vec<Vec<usize>> = Vec::new();
+        let mut start = 0;
+        for (index, piece) in pieces.iter().enumerate() {
+            let content = match piece.strip_suffix('\r') {
+                Some(content) if index + 1 < pieces.len() => content,
+                _ => piece,
+            };
+            let mut stops: Vec<usize> = content
+                .grapheme_indices(true)
+                .map(|(at, _)| start + at)
+                .collect();
+            stops.push(start + content.len());
+            lines.push(stops);
+            start += piece.len() + 1;
+        }
+        // An offset's line, and its column: the graphemes of the line that start before it.
+        let position = |offset: usize| {
+            let line = lines.iter().rposition(|stops| stops[0] <= offset).unwrap();
+            let column = lines[line].iter().filter(|&&stop| stop < offset).count();
+            (line, column)
+        };
+        let (anchor_line, anchor_column) = position(corners.anchor);
+        let (head_line, head_column) = position(corners.head);
+        let (left, right) = (
+            anchor_column.min(head_column),
+            anchor_column.max(head_column),
+        );
+        let on_line = |line: usize| {
+            let stops = &lines[line];
+            let line_end = stops[stops.len() - 1];
+            let start = stops.get(left).copied().filter(|&start| start < line_end)?;
+            let end = match stops.get(right + 1) {
+                Some(&end) if !to_line_ends => end,
+                _ => line_end,
+            };
+            Some(if head_column < anchor_column && !to_line_ends {
+                Range::new(end, start)
+            } else {
+                Range::new(start, end)
+            })
+        };
+        let head_line_end = lines[head_line][lines[head_line].len() - 1];
+        let primary = on_line(head_line).unwrap_or(Range::point(head_line_end));
+        let mut ranges: Vec<Range> = (anchor_line.min(head_line)..=anchor_line.max(head_line))
+            .filter_map(on_line)
+            .collect();
+        if !ranges.contains(&primary) {
+            ranges.push(primary);
+            ranges.sort_unstable_by_key(Range::start);
+        }
+        (primary, ranges)
+    }
+
     proptest! {
+        #[test]
+        fn block_matches_a_model_of_the_lines_and_their_graphemes(
+            (string, corners, _) in text_range_and_target(),
+            to_line_ends in any::<bool>(),
+        ) {
+            let text = Text::from(string.as_str());
+            let block = Selection::block(&text, corners.anchor, corners.head, to_line_ends);
+            let (primary, ranges) = block_model(&string, corners, to_line_ends);
+            prop_assert_eq!(block.ranges(), &ranges[..]);
+            prop_assert_eq!(block.primary(), primary);
+        }
+
         #[test]
         fn split_lines_gives_the_pieces_of_each_range_between_line_breaks(
             (string, (primary, others)) in strategies::text_and_ranges(),
