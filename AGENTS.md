@@ -122,6 +122,16 @@ dev box (24 cores, rustc 1.98.1), stripped binaries.
   primary. The block cursor is the grapheme at the head, or the one before it when the range
   points forward. Normal mode keeps ranges at least one grapheme wide; Insert mode allows empty
   ones. Vim's cursor is a one-grapheme range, and operator + motion selects, then acts.
+- **Selection operations are named `Selection` methods in `buffer-text`** (decided, not
+  implemented): collapse, flip, extend to whole lines, trim; select all, keep, drop, or rotate
+  the primary, merge, split into lines, copy onto the next line, and a block from two corners.
+  - When a range splits, the part with its block cursor is primary; a dropped primary hands over
+    to the next range.
+  - Vim's linewise and blockwise Visual modes are the Vim preset's: the document holds the
+    charwise range or the block's ranges, and the preset keeps the mode, the block's corners, and
+    the goal column. Block and copy columns count graphemes, as `j`/`k` do, and a block skips
+    lines that end before it (no padding).
+  - Regex operations (select, split, or filter by matches) wait for in-note search.
 - **Lines = line breaks + 1.** `\n` and `\r\n` break lines; a lone `\r` doesn't. Every offset
   0..=len is on exactly one line, so `"foo\n"` has two lines and an empty note has one. The Vim
   preset keeps its cursor off the empty line after a final break.
