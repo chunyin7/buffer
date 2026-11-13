@@ -10,8 +10,9 @@ How `buffer-text` holds a note's text and changes it. The decisions behind it:
 [0032](../decisions/0032-motions-return-targets.md) (motions and Normal-mode ranges),
 [0034](../decisions/0034-word-motions-stop-at-line-edges.md) (word motions at line edges),
 [0035](../decisions/0035-find-paragraph-and-bracket-motions.md) (find, paragraph, and bracket
-motions), [0038](../decisions/0038-text-objects.md) (text objects), and
-[0040](../decisions/0040-registers-in-modal.md) (yank and paste).
+motions), [0038](../decisions/0038-text-objects.md) (text objects),
+[0040](../decisions/0040-registers-in-modal.md) (yank and paste), and
+[0043](../decisions/0043-selection-operations.md) (selection operations).
 
 Status: text with lines and grapheme boundaries, grapheme, line, word, find, paragraph, and
 bracket motions, text objects, change sets, selections with block cursors, transactions, and
@@ -449,6 +450,31 @@ grapheme ([0032](../decisions/0032-motions-return-targets.md)).
   - Ranges that now overlap merge, as in `Selection::new`.
 - Each range costs a few grapheme lookups, O(log n) each.
 
+### Selection operations
+
+Operations that reshape a selection without an edit are `Selection` methods
+([0043](../decisions/0043-selection-operations.md)). Each takes the selection, and the text if it
+reads it, and returns the new one; the presets bind commands to them and apply
+`for_normal_mode` afterwards.
+
+| Method | Each range becomes | Vim | Helix |
+|---|---|---|---|
+| `collapse(text)` | an empty range at its block cursor | | `;` |
+| `flip()` | itself, anchor and head swapped | `o` | `Alt-;` |
+| `extend_to_lines(text)` | whole lines, with their line breaks | `V`, linewise operators | `x` |
+| `trim(text)` | itself without the blank graphemes at its ends | | `_` |
+
+- `extend_to_lines` grows a range back to the start of its first line and on to the start of the
+  line after its last, or to the end of the text. A range keeps its direction, one that covers
+  whole lines already stays as it is, and ranges on one line merge. Taking one more line on a
+  repeat, as Helix's `x` does, is the preset's. In Vim's linewise Visual mode the document holds
+  the charwise range, and the preset extends it when it acts.
+- `trim` counts line breaks as blanks. A range that holds nothing else is dropped, and if it was
+  primary, the next range is, or the previous one after the last. If every range is blank,
+  nothing changes.
+- Each costs a few rope lookups per range, O(log n) each; `trim` also reads the blanks it takes
+  off.
+
 ## Transactions
 
 A `Transaction` is one edit: a change set and the selection after it. It is internal to
@@ -548,10 +574,11 @@ mapping keeps untouched chars in place and is monotonic, and every result is can
 Generated texts mix multi-byte chars, combining marks, emoji sequences, and line breaks, and some
 span several rope chunks. For selections, they check that merging covers exactly the given
 ranges, that mapping in one pass equals mapping each range alone, and that ranges no change
-touches keep their text. For lines, they split the text at each `\n` and check the line count,
-each line's start and end, and the line of every char boundary against the pieces. For graphemes,
-they compare each method with unicode-segmentation run over the whole string: at every char
-boundary of a short text, and near each chunk edge of a long one, including runs of regional
+touches keep their text; `extend_to_lines` and `trim` are checked against models that split the
+string into lines and graphemes. For lines, they split the text at each `\n` and check the line
+count, each line's start and end, and the line of every char boundary against the pieces. For
+graphemes, they compare each method with unicode-segmentation run over the whole string: at every
+char boundary of a short text, and near each chunk edge of a long one, including runs of regional
 indicators, combining accents, joined emoji, and flags after prepended chars, long enough to
 cross chunks.
 

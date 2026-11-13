@@ -103,6 +103,32 @@ impl Range {
         }
     }
 
+    /// A range over `start..end` that points as this one does.
+    fn spanning(self, start: usize, end: usize) -> Self {
+        if self.anchor > self.head {
+            Self::new(end, start)
+        } else {
+            Self::new(start, end)
+        }
+    }
+
+    /// The range grown to whole lines; see [`Selection::extend_to_lines`].
+    fn extend_to_lines(self, text: &Text) -> Self {
+        let start = text.line_start(text.line_of(self.start()));
+        self.spanning(start, text.line_start(self.last_line(text) + 1))
+    }
+
+    /// The line of the last byte the range covers: a range that ends where a line starts holds
+    /// the line before it whole, break and all. For an empty range, it is the line it is on.
+    fn last_line(self, text: &Text) -> usize {
+        let line = text.line_of(self.end());
+        if !self.is_empty() && self.end() == text.line_start(line) {
+            line - 1
+        } else {
+            line
+        }
+    }
+
     /// Maps the range through a change. Its start stays after text inserted at it and its end
     /// before, so inserts at its edges don't grow it; an empty range moves past such text.
     fn map(self, mapper: &mut Mapper<'_>) -> Self {
@@ -251,6 +277,73 @@ impl Selection {
             .collect()
     }
 
+    /// Collapses every range to an empty one at its block cursor, as Helix's `;` does
+    /// (ADR 0043).
+    ///
+    /// # Panics
+    ///
+    /// Panics if a range's head is past the end of `text` or inside a char.
+    pub fn collapse(mut self, text: &Text) -> Self {
+        for range in &mut self.ranges {
+            *range = Range::point(range.cursor(text));
+        }
+        self.normalize();
+        self
+    }
+
+    /// Swaps every range's anchor and head, as Helix's `Alt-;` and Vim's `o` do (ADR 0043).
+    pub fn flip(mut self) -> Self {
+        for range in &mut self.ranges {
+            *range = Range::new(range.head, range.anchor);
+        }
+        self
+    }
+
+    /// Grows every range to whole lines, as Helix's `x` and Vim's linewise selections do
+    /// (ADR 0043): back to the start of its first line, and on to the start of the line after
+    /// its last, line break included, or to the end of the text. A range keeps its direction,
+    /// and one that covers whole lines already stays as it is. Ranges on one line merge.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a range ends past the end of `text` or inside a char.
+    pub fn extend_to_lines(mut self, text: &Text) -> Self {
+        for range in &mut self.ranges {
+            *range = range.extend_to_lines(text);
+        }
+        self.normalize();
+        self
+    }
+
+    /// Takes the blank graphemes off both ends of every range, line breaks among them, as
+    /// Helix's `_` does (ADR 0043). A range that holds nothing else is dropped, and if it was
+    /// primary, the next range is, or the previous one after the last. If every range is blank,
+    /// nothing changes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a range ends past the end of `text` or inside a char.
+    pub fn trim(self, text: &Text) -> Self {
+        let trimmed: Vec<Option<Range>> = self
+            .ranges
+            .iter()
+            .map(|range| {
+                let span = text.trim_blanks(range.start()..range.end())?;
+                Some(range.spanning(span.start, span.end))
+            })
+            .collect();
+        let (before, from_primary) = trimmed.split_at(self.primary_index);
+        let primary = from_primary
+            .iter()
+            .chain(before.iter().rev())
+            .flatten()
+            .next();
+        match primary {
+            Some(&primary) => Self::new(primary, trimmed.into_iter().flatten()),
+            None => self,
+        }
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "the primary range is kept or merged into a kept range"
@@ -285,6 +378,7 @@ mod tests {
     use proptest::collection::vec;
     use proptest::prelude::*;
     use proptest::sample::select;
+    use unicode_segmentation::UnicodeSegmentation;
 
     use super::*;
     use crate::Text;
@@ -353,6 +447,51 @@ mod tests {
         assert_eq!(mixed.ranges(), [Range::new(1, 6)]);
     }
 
+    #[test]
+    fn collapse_leaves_the_block_cursors_and_flip_swaps_the_ends() {
+        let text = Text::from("abc def");
+        // `abc` forward, its cursor on `c`, and `def` backward, the primary, its cursor on `d`.
+        let selection = Selection::new(Range::new(7, 4), [Range::new(0, 3)]);
+        let collapsed = selection.clone().collapse(&text);
+        assert_eq!(collapsed.ranges(), [Range::point(2), Range::point(4)]);
+        assert_eq!(collapsed.primary(), Range::point(4));
+        let flipped = selection.flip();
+        assert_eq!(flipped.ranges(), [Range::new(3, 0), Range::new(4, 7)]);
+        assert_eq!(flipped.primary(), Range::new(4, 7));
+    }
+
+    #[test]
+    fn extend_to_lines_takes_whole_lines_with_their_breaks() {
+        // Lines `ab`, `cd`, an empty one, and `ef` start at 0, 3, 6, and 7.
+        let text = Text::from("ab\ncd\n\nef");
+        let extend = |range| Selection::single(range).extend_to_lines(&text).primary();
+        assert_eq!(extend(Range::point(1)), Range::new(0, 3));
+        assert_eq!(extend(Range::point(6)), Range::new(6, 7));
+        // The last line has no break. A range across lines keeps its direction.
+        assert_eq!(extend(Range::point(8)), Range::new(7, 9));
+        assert_eq!(extend(Range::new(5, 1)), Range::new(6, 0));
+        // Whole lines stay as they are, and ranges on one line merge.
+        assert_eq!(extend(Range::new(0, 3)), Range::new(0, 3));
+        let on_one_line = Selection::new(Range::new(0, 1), [Range::new(1, 2)]);
+        assert_eq!(
+            on_one_line.extend_to_lines(&text).ranges(),
+            [Range::new(0, 3)]
+        );
+    }
+
+    #[test]
+    fn trim_drops_blank_ranges_and_hands_the_primary_on() {
+        // ` ab ` 0..4, two line breaks, and ` cd` 6..9.
+        let text = Text::from(" ab \n\n cd");
+        let blank = Range::new(4, 6);
+        let selection = Selection::new(blank, [Range::new(4, 0), Range::new(6, 9)]);
+        let trimmed = selection.trim(&text);
+        assert_eq!(trimmed.ranges(), [Range::new(3, 1), Range::new(7, 9)]);
+        assert_eq!(trimmed.primary(), Range::new(7, 9));
+        // With nothing else left, a blank range stays.
+        assert_eq!(Selection::single(blank).trim(&text).primary(), blank);
+    }
+
     /// A primary range and up to six others over offsets 0..32, pointing either way.
     fn primary_and_others() -> impl Strategy<Value = (Range, Vec<Range>)> {
         let range = (0..32_usize, 0..32_usize).prop_map(|(anchor, head)| Range::new(anchor, head));
@@ -389,6 +528,66 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn extend_to_lines_covers_the_lines_of_each_range(
+            (string, (primary, others)) in strategies::text_and_ranges(),
+        ) {
+            let text = Text::from(string.as_str());
+            // An offset inside a `\r\n` is on the line the break ends.
+            let starts: Vec<usize> = std::iter::once(0)
+                .chain(string.match_indices('\n').map(|(at, _)| at + 1))
+                .collect();
+            let model = |range: Range| {
+                let start = starts.iter().copied().rfind(|&start| start <= range.start()).unwrap();
+                let end = if !range.is_empty() && starts.contains(&range.end()) {
+                    range.end()
+                } else {
+                    let next = starts.iter().copied().find(|&start| start > range.end());
+                    next.unwrap_or(string.len())
+                };
+                range.spanning(start, end)
+            };
+            let selection = Selection::new(primary, others);
+            let expected = Selection::new(
+                model(selection.primary()),
+                selection.ranges().iter().map(|&range| model(range)),
+            );
+            prop_assert_eq!(selection.extend_to_lines(&text), expected);
+        }
+
+        #[test]
+        fn trim_keeps_each_range_from_its_first_to_its_last_solid_grapheme(
+            (string, (primary, others)) in strategies::text_and_ranges(),
+        ) {
+            let text = Text::from(string.as_str());
+            // Ranges on grapheme boundaries, as a preset keeps them.
+            let selection = Selection::new(primary, others).for_normal_mode(&text);
+            let model = |range: &Range| {
+                let mut solid = string[range.start()..range.end()]
+                    .grapheme_indices(true)
+                    .filter(|(_, grapheme)| !grapheme.chars().all(char::is_whitespace));
+                let (first, grapheme) = solid.next()?;
+                let (last, grapheme) = solid.next_back().unwrap_or((first, grapheme));
+                let start = range.start();
+                Some(range.spanning(start + first, start + last + grapheme.len()))
+            };
+            let ranges = selection.ranges();
+            let kept: Vec<Range> = ranges.iter().filter_map(model).collect();
+            let trimmed = selection.clone().trim(&text);
+            if kept.is_empty() {
+                prop_assert_eq!(trimmed, selection);
+            } else {
+                prop_assert_eq!(trimmed.ranges(), &kept[..]);
+                // The primary range, the next one kept after it, or the last one before it.
+                let (before, from_primary) = ranges.split_at(selection.primary_index());
+                let primary = from_primary
+                    .iter()
+                    .find_map(model)
+                    .or_else(|| before.iter().rev().find_map(model));
+                prop_assert_eq!(Some(trimmed.primary()), primary);
+            }
+        }
+
         #[test]
         fn yank_copies_each_range((string, (primary, others)) in strategies::text_and_ranges()) {
             let selection = Selection::new(primary, others);

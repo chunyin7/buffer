@@ -299,6 +299,36 @@ impl Text {
         end
     }
 
+    /// `range` without the blank graphemes at its ends, line breaks among them, or `None` if it
+    /// holds nothing else. Blank as for [`first_non_blank`](Self::first_non_blank).
+    pub(crate) fn trim_blanks(&self, range: Range<usize>) -> Option<Range<usize>> {
+        let blanks = |chars: &mut dyn Iterator<Item = char>| -> usize {
+            chars
+                .take_while(|ch| ch.is_whitespace())
+                .map(char::len_utf8)
+                .sum()
+        };
+        let slice = self.rope.byte_slice(range.clone());
+        let start = range.start + blanks(&mut slice.chars());
+        if start == range.end {
+            return None;
+        }
+        let end = range.end - blanks(&mut slice.chars().rev());
+        // A blank char can share a grapheme with the char after it, as a space does with an
+        // accent, or with the one before it, as it does after a prepended char.
+        let start = if self.is_grapheme_boundary(start) {
+            start
+        } else {
+            self.prev_grapheme_boundary(start).max(range.start)
+        };
+        let end = if self.is_grapheme_boundary(end) {
+            end
+        } else {
+            self.next_grapheme_boundary(end).min(range.end)
+        };
+        Some(start..end)
+    }
+
     /// Moves `count` lines down from `offset`, as `j` does: to the grapheme `goal` graphemes from
     /// the start of the line, or to the end of the line's content if the line is shorter. Without
     /// a goal, the goal is `offset`'s column: the graphemes from its line's start to it.
