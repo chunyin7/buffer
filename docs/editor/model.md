@@ -15,8 +15,8 @@ motions), [0038](../decisions/0038-text-objects.md) (text objects), and
 
 Status: text with lines and grapheme boundaries, grapheme, line, word, find, paragraph, and
 bracket motions, text objects, change sets, selections with block cursors, transactions, and
-documents with undo history exist. Yank and paste land later in M1; registers live in
-`buffer-modal`.
+documents with undo history exist, and a selection yanks its text. Paste lands later in M1;
+registers live in `buffer-modal`.
 
 ## Text
 
@@ -401,6 +401,9 @@ Mapping is monotonic: for one `assoc`, a later position never maps before an ear
   primary if either was. Taking the primary range itself means a selection can't be empty or have
   a primary index past its ranges.
 - Ranges sit in a `SmallVec` with room for one, so a single-range selection doesn't allocate.
+- `yank(text)` copies the text of each range, in the order of the ranges, an empty string for an
+  empty range. A register value is that list
+  ([0040](../decisions/0040-registers-in-modal.md)); `buffer-modal` stores it.
 
 ### Mapping selections
 

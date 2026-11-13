@@ -238,6 +238,19 @@ impl Selection {
         self
     }
 
+    /// The text of each range, in the order of [`ranges`](Self::ranges), for a register to hold
+    /// (ADR 0040). An empty range gives an empty string.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a range ends past the end of `text` or inside a char.
+    pub fn yank(&self, text: &Text) -> Vec<String> {
+        self.ranges
+            .iter()
+            .map(|range| text.to_string_in(range.start()..range.end()))
+            .collect()
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "the primary range is kept or merged into a kept range"
@@ -376,6 +389,17 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn yank_copies_each_range((string, (primary, others)) in strategies::text_and_ranges()) {
+            let selection = Selection::new(primary, others);
+            let slices: Vec<&str> = selection
+                .ranges()
+                .iter()
+                .map(|range| &string[range.start()..range.end()])
+                .collect();
+            prop_assert_eq!(selection.yank(&Text::from(string.as_str())), slices);
+        }
+
         #[test]
         fn new_sorts_and_merges((primary, others) in primary_and_others()) {
             let selection = Selection::new(primary, others.iter().copied());
